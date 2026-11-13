@@ -3017,8 +3017,27 @@ window.__IP_MODIFICA=true;
         var dove = nomeDi(s.magazzini, magazzino);
         conferma('Scaricare ' + quanti + '?', 'Escono da ' + dove + ' con causale "' + nomeDi(s.causali, causale) + '". Si fa una volta sola e dall\'app non si annulla.', 'Scarica', function () {
           salva.disabled = true;
-          salva.innerHTML = '<b>Scarico…</b>';
-          chiedi('/retail/cart/' + c.id + '/unload', codifica([['unload[warehouse]', magazzino], ['unload[reason]', causale], ['unload[notes]', note.value.trim()], ['unload[_token]', s.gettone]])).then(function (esito) {
+          salva.innerHTML = '<b>Controllo…</b>';
+          function rimetti() { salva.disabled = false; salva.innerHTML = '<b>Scarica</b>'; }
+          // Il CRM accetta uno scarico anche su un carrello già scaricato (provato su staging il 13/11/2026):
+          // prima di inviare rileggo il carrello e procedo solo se il modulo di scarico c'è ancora.
+          chiedi('/retail/cart/' + c.id).then(function (adesso) {
+            var fresco = adesso.doc && adesso.doc.getElementById('cart-compose') ? leggiScarico(adesso.doc) : undefined;
+            if (fresco === undefined) { rimetti(); mostraAvviso('Non scaricato', 'Non riesco a rileggere il carrello dal CRM. Riprova.'); avvisa('errore'); return; }
+            if (!fresco) {
+              c.scarico = null;
+              dopoRitorno = function () { apriCarrello(c.id, false); mostraAvviso('Già scaricato', 'Questo carrello risulta già scaricato: non viene scaricato una seconda volta.'); avvisa('errore'); };
+              history.back();
+              return;
+            }
+            salva.innerHTML = '<b>Scarico…</b>';
+            invia(fresco.gettone);
+          }, function () { rimetti(); mostraAvviso('Connessione assente', 'Lo scarico non è stato fatto.'); avvisa('errore'); });
+        });
+      });
+      function invia(gettone) {
+          var dove = nomeDi(s.magazzini, magazzino);
+          chiedi('/retail/cart/' + c.id + '/unload', codifica([['unload[warehouse]', magazzino], ['unload[reason]', causale], ['unload[notes]', note.value.trim()], ['unload[_token]', gettone]])).then(function (esito) {
             // Scarico riuscito: il CRM torna al carrello e il modulo di scarico non c'è più.
             if (esito.doc && esito.doc.getElementById('cart-compose') && !esito.doc.querySelector('form[name="unload"]')) {
               c.scarico = null;
@@ -3033,11 +3052,10 @@ window.__IP_MODIFICA=true;
           }, function () {
             salva.disabled = false;
             salva.innerHTML = '<b>Scarica</b>';
-            mostraAvviso('Connessione assente', 'Lo scarico non è stato fatto.');
+            mostraAvviso('Connessione assente', 'Lo scarico potrebbe non essere stato fatto: riapri il carrello per controllare.');
             avvisa('errore');
           });
-        });
-      });
+      }
       azioni.innerHTML = '';
       azioni.appendChild(salva);
       radice.classList.remove('ip-senza-azioni');
