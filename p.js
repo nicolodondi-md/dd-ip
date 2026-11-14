@@ -3827,6 +3827,7 @@ window.__IP_MODIFICA=true;
 
     function leggiOrdine(x) {
       var cliente = x.customer_name && x.customer_name.name && !/^non disponibile$/i.test(pulisci(x.customer_name.name)) ? pulisci(x.customer_name.name) : '';
+      if (cliente && cliente === cliente.toLowerCase()) cliente = cliente.replace(/(^|[\s'-])([a-zà-ù])/g, function (t, prima, lettera) { return prima + lettera.toUpperCase(); });
       var tipo = x.type && x.type.value ? pulisci(x.type.value) : '';
       return {
         id: String(x.id), numero: x.secret ? String(x.secret) : '', quando: dataCrm(x.createdAt), testoData: x.createdAt || '',
@@ -3997,7 +3998,7 @@ window.__IP_MODIFICA=true;
         tot.appendChild(el('div', 'ip-numero-nome', ordini.filtrati === 1 ? '1 vendita' : interoItaliano(ordini.filtrati) + ' vendite'));
         tot.appendChild(el('div', 'ip-numero-valore', euro(ordini.somme.totale)));
         tot.appendChild(el('div', 'ip-totale-periodo', 'IVA esclusa ' + euro(ordini.somme.imponibile) + ' · ' + intervallo().replace(' - ', ' → ')));
-        if (ordini.somme.saldo) tot.appendChild(el('div', 'ip-totale-saldo', 'Saldo residuo ' + euro(ordini.somme.saldo)));
+        if (ordini.somme.saldo > 0) tot.appendChild(el('div', 'ip-totale-saldo', 'Da incassare ' + euro(ordini.somme.saldo)));
         vista.appendChild(tot);
       }
       if (messaggio) {
@@ -4070,11 +4071,14 @@ window.__IP_MODIFICA=true;
       var cifre = corpoPagina.querySelectorAll('.tnum');
       for (var i = 0; i < cifre.length; i++) {
         var n = cifre[i];
-        if (n.closest('.console-card-body')) continue;
-        var box = n.parentElement;
-        while (box && box !== corpoPagina && !box.querySelector('.text-text-muted')) box = box.parentElement;
-        var etichetta = box && box.querySelector('.text-text-muted');
-        if (etichetta) numeri[pulisci(etichetta.textContent)] = pulisci(n.textContent);
+        // Il riquadro del numero contiene anche la sua etichetta (testo attenuato, non vuoto: l'icona ha la stessa classe).
+        var etichetta = null, box = n.parentElement;
+        while (box && box !== corpoPagina && !etichetta) {
+          var attenuati = box.querySelectorAll('.text-text-muted');
+          for (var a = 0; a < attenuati.length && !etichetta; a++) if (pulisci(attenuati[a].textContent) && !attenuati[a].contains(n)) etichetta = attenuati[a];
+          box = box.parentElement;
+        }
+        if (etichetta && !numeri[pulisci(etichetta.textContent)]) numeri[pulisci(etichetta.textContent)] = pulisci(n.textContent);
       }
       var sezioni = {};
       var corpi = corpoPagina.querySelectorAll('.console-card-body');
@@ -4256,7 +4260,7 @@ window.__IP_MODIFICA=true;
           testi.appendChild(sotto);
           var stato = el('span', 'ip-ordine-stati');
           var origine = x.source && x.source.value ? pulisci(x.source.value) : '';
-          if (origine) stato.appendChild(chip(origine));
+          if (origine && !/^stock$/i.test(origine)) stato.appendChild(chip(origine));
           var cons = x.deliveryStatus && x.deliveryStatus.value;
           var testoCons = pulisci(Array.isArray(cons) ? cons.join(', ') : String(cons || ''));
           if (testoCons && !/^consegnato$/i.test(testoCons)) stato.appendChild(chip(testoCons, 'ip-chip-ambra'));
