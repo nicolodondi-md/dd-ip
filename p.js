@@ -4413,7 +4413,7 @@ window.__IP_MODIFICA=true;
         { id: 'ticket', titolo: 'Ticket promozionali', sotto: 'Messaggi stampati sugli scontrini', icona: 'ticket', prova: '/promo-ticket?dataTableView=promo_ticket_table&page=1&perPage=1' }
       ] },
       { nome: 'Configurazione casse', voci: [
-        { id: 'casse', titolo: 'Casse', sotto: 'Casse dei punti vendita, con stampante e POS', icona: 'casse', prova: '/retail/point-of-sale?dataTableView=point_of_sale_table&page=1&perPage=1' },
+        { id: 'casse', titolo: 'Casse', sotto: 'Stampante e POS di ogni cassa', icona: 'casse', prova: '/retail/point-of-sale?dataTableView=point_of_sale_table&page=1&perPage=1' },
         { id: 'stampanti', titolo: 'Stampanti', sotto: 'Stampanti fiscali e indirizzi di rete', icona: 'stampanti', prova: '/retail/printer?dataTableView=printer_table&page=1&perPage=1' },
         { id: 'terminali', titolo: 'Terminali', sotto: 'POS di pagamento e indirizzi di rete', icona: 'terminali', prova: '/retail/terminal?dataTableView=terminal_table&page=1&perPage=1' }
       ] }
@@ -4763,7 +4763,8 @@ window.__IP_MODIFICA=true;
             lato.appendChild(el('span', 'ip-ordine-ora', q ? q.ora : ''));
             riga.appendChild(lato);
             var t = el('span', 'ip-riga-testi');
-            var cliente = pulisci([x.order_customer_name, x.order_customer_surname && x.order_customer_surname !== x.order_customer_name ? x.order_customer_surname : ''].filter(Boolean).join(' '));
+            var nomeCli = pulisci(x.order_customer_name || ''), cognomeCli = pulisci(x.order_customer_surname || '');
+            var cliente = nomeCli && cognomeCli && nomeCli.toLowerCase().indexOf(cognomeCli.toLowerCase()) === -1 ? nomeCli + ' ' + cognomeCli : (nomeCli || cognomeCli);
             t.appendChild(el('span', 'ip-riga-nome', cliente || (fattura ? 'Fattura' : 'Scontrino')));
             t.appendChild(el('span', 'ip-riga-sotto', [pulisci(x.transaction_createdBy_name || ''), pulisci(x.transaction_pointOfSale_name || ''), pulisci(x.order_headquarter_name || '')].filter(Boolean).join(' · ')));
             riga.appendChild(t);
@@ -5018,7 +5019,14 @@ window.__IP_MODIFICA=true;
         if (mia !== richiesta) return;
         if (!r[0].dati || !r[0].dati.rows) { erroreDati(zona, r[0], id); return; }
         zona.innerHTML = '';
-        var perIp = function (x) { var m = {}; (x && x.dati && x.dati.rows || []).forEach(function (y) { if (y.ip) m[y.ip] = pulisci(y.name || ''); }); return m; };
+        // Nome dal suo indirizzo IP, solo se l'indirizzo è di un elemento solo: se è condiviso si mostra l'IP
+        // (il collegamento esatto è nella scheda della cassa).
+        var perIp = function (x) {
+          var m = {}, conta = {};
+          (x && x.dati && x.dati.rows || []).forEach(function (y) { if (!y.ip) return; conta[y.ip] = (conta[y.ip] || 0) + 1; m[y.ip] = pulisci(y.name || ''); });
+          Object.keys(conta).forEach(function (ip) { if (conta[ip] > 1) m[ip] = ip + ' (indirizzo condiviso)'; });
+          return m;
+        };
         var stampanti = perIp(r[1]), terminali = perIp(r[2]);
         // Raggruppate per punto vendita.
         var gruppi = {}, ordine = [];
@@ -5070,7 +5078,13 @@ window.__IP_MODIFICA=true;
       if (tag === 'select') { var o = c.options[c.selectedIndex]; return o ? pulisci(o.textContent) : ''; }
       if (tag === 'textarea') return pulisci(c.textContent);
       if (c.type === 'checkbox') return c.hasAttribute('checked') ? 'Sì' : 'No';
-      return pulisci(c.getAttribute('value') || '');
+      // Date, orari e altri campi speciali: valore iniziale, oppure il campo nascosto con lo stesso nome.
+      var valore = c.getAttribute('value') || c.getAttribute('initial-value') || '';
+      if (!valore && c.getAttribute('name') && c.parentElement) {
+        var nascosto = c.parentElement.querySelector('input[type="hidden"][name="' + c.getAttribute('name') + '"]');
+        if (nascosto) valore = nascosto.getAttribute('value') || '';
+      }
+      return pulisci(valore);
     }
     function leggiModulo(doc) {
       var corpo = doc.querySelector('.console-page-body') || doc.body;
@@ -5081,11 +5095,11 @@ window.__IP_MODIFICA=true;
       var nodi = modulo.querySelectorAll('p.font-semibold, label');
       for (var i = 0; i < nodi.length; i++) {
         var n = nodi[i];
-        if (n.tagName === 'P') { gruppo = { nome: pulisci(n.textContent), righe: [] }; gruppi.push(gruppo); continue; }
+        if (n.tagName === 'P') { gruppo = { nome: pulisci(n.textContent).replace(/^modifica\b.*/i, 'Dati'), righe: [] }; gruppi.push(gruppo); continue; }
         var etichetta = pulisci(n.textContent).replace(/\*$/, '');
         if (!etichetta) continue;
         var contenitore = n.parentElement;
-        var c = contenitore.querySelector('console-select, console-ajax-select, textarea, select, input:not([type="hidden"])');
+        var c = contenitore.querySelector('console-select, console-ajax-select, console-date-picker, console-input-mask, textarea, select, input:not([type="hidden"])');
         if (!c) continue;
         var nome = c.getAttribute('name') || '';
         if (!nome || visti[nome] || /_token|\[file\]/.test(nome)) continue;
