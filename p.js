@@ -2073,6 +2073,19 @@ window.__IP_MODIFICA=true;
     var totaleCarrelli = 0;
     var inCarico = false;
 
+    // Mai troppe richieste al CRM insieme: i lavori partono al massimo "quanti" alla volta, nell'ordine dato.
+    // lavori = funzioni che restituiscono una promessa; il risultato è l'elenco delle risposte (null se fallita).
+    function inFila(lavori, quanti) {
+      var risultati = new Array(lavori.length), prossimo = 0;
+      function avanti() {
+        if (prossimo >= lavori.length) return Promise.resolve();
+        var i = prossimo++;
+        return Promise.resolve().then(lavori[i]).then(function (r) { risultati[i] = r; }, function () { risultati[i] = null; }).then(avanti);
+      }
+      var corse = [];
+      for (var k = 0; k < Math.min(quanti || 2, lavori.length); k++) corse.push(avanti());
+      return Promise.all(corse).then(function () { return risultati; });
+    }
     function chiediJson(indirizzo, daInviare) {
       var opzioni = { credentials: 'same-origin', headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' } };
       if (daInviare) {
@@ -3742,7 +3755,12 @@ window.__IP_MODIFICA=true;
         if (mia !== richiesta || vistaCarrelli !== 'vendite') return;
         if (/\/login$/.test(r.percorso)) { location.reload(); return; }
         var letto = leggiVendite(r.doc);
-        if (!letto) { disegnaVendite(r.doc.getElementById('console-aside') ? 'Questo utente non ha accesso alla dashboard delle vendite.' : 'Non riesco a leggere la dashboard dal CRM.'); return; }
+        if (!letto) {
+          var negato = !!r.doc.getElementById('console-aside');
+          disegnaVendite(negato ? 'Questo utente non ha accesso alla dashboard delle vendite.' : 'Non riesco a leggere la dashboard dal CRM.');
+          if (negato) negaAccesso('vendite');
+          return;
+        }
         vendite.dati = letto.dati;
         vendite.filtri = letto.filtri;
         disegnaVendite();
@@ -3890,8 +3908,7 @@ window.__IP_MODIFICA=true;
       disegnaOrdini();
       if (!daCapo) vista.scrollTop = scorrimento;
       var pagina = ordini.pagina + 1;
-      Promise.all([chiediJson(indirizzoOrdini(pagina)), leggiOpzioniOrdini().catch(function () { return null; })]).then(function (risposte) {
-        var r = risposte[0];
+      chiediJson(indirizzoOrdini(pagina)).then(function (r) {
         if (mia !== richiesta || vistaCarrelli !== 'ordini') return;
         ordini.inCarico = false;
         if (r.login) { location.reload(); return; }
@@ -4155,35 +4172,40 @@ window.__IP_MODIFICA=true;
       if (!senzaAttesa) { disegnaOrdine(); vista.scrollTop = 0; }
       var nulla = function () { return { dati: null }; };
       var tabella = function (percorso, nome, quanti) { return chiediJson('/retail/order/' + id + percorso + '?dataTableView=' + nome + '&f%5Bsearch%5D=&page=1&perPage=' + quanti).catch(nulla); };
-      Promise.all([
-        chiedi('/retail/order/' + id),
-        tabella('/row', 'row_table', 500),
-        tabella('/payment', 'payment_table', 100),
-        tabella('/transaction', 'transaction_table', 100),
-        tabella('/service-row/list', 'service_row_table', 100),
-        tabella('/summary/note/list', 'note_table', 100)
-      ]).then(function (r) {
+      // A ondate di due richieste: la vendita compare subito con dettagli e prodotti, il resto si aggiunge dopo.
+      var righe = function (x) { return x && x.dati && x.dati.rows ? x.dati.rows : []; };
+      var dati = null, prima = true;
+      var mostra = function () {
+        if (mia !== richiesta || vistaCarrelli !== 'ordine') return false;
+        var dove = vista.scrollTop;
+        ordini.aperto.dati = dati;
+        disegnaOrdine();
+        vista.scrollTop = prima && senzaAttesa ? 0 : dove;
+        prima = false;
+        vista.classList.remove('ip-in-attesa');
+        return true;
+      };
+      inFila([function () { return chiedi('/retail/order/' + id); }, function () { return tabella('/row', 'row_table', 500); }], 2).then(function (r) {
         if (mia !== richiesta || vistaCarrelli !== 'ordine') return;
-        if (/\/login$/.test(r[0].percorso) || r[1].login) { location.reload(); return; }
+        if (!r[0]) throw new Error('rete');
+        if (/\/login$/.test(r[0].percorso) || (r[1] && r[1].login)) { location.reload(); return; }
         var dettaglio = leggiDettaglioOrdine(r[0].doc);
-        var righe = function (x) { return x && x.dati && x.dati.rows ? x.dati.rows : []; };
-        var fine = function (fatture) {
-          if (mia !== richiesta || vistaCarrelli !== 'ordine') return;
-          ordini.aperto.dati = {
-            dettaglio: dettaglio, prodotti: righe(r[1]), sommeProdotti: r[1].dati && r[1].dati.additionalData || {},
-            pagamenti: righe(r[2]), transazioni: righe(r[3]), servizi: righe(r[4]), note: righe(r[5]), fatture: fatture
-          };
-          var dove = vista.scrollTop;
-          disegnaOrdine();
-          if (senzaAttesa) vista.scrollTop = 0; else vista.scrollTop = dove;
-          vista.classList.remove('ip-in-attesa');
-        };
-        if (!dettaglio.haFatture) { fine([]); return; }
-        chiediJson('/retail/order/invoice/' + id + '/invoice?dataTableView=invoice_table&page=1&perPage=50').then(function (f) { fine(righe(f)); }, function () { fine([]); });
-      }, function () {
+        dati = { dettaglio: dettaglio, prodotti: righe(r[1]), sommeProdotti: r[1] && r[1].dati && r[1].dati.additionalData || {}, pagamenti: [], transazioni: [], servizi: [], note: [], fatture: [] };
+        if (!mostra()) return;
+        return inFila([function () { return tabella('/payment', 'payment_table', 100); }, function () { return tabella('/transaction', 'transaction_table', 100); }], 2).then(function (r2) {
+          dati.pagamenti = righe(r2[0]); dati.transazioni = righe(r2[1]);
+          if (!mostra()) return;
+          var ultimi = [function () { return tabella('/service-row/list', 'service_row_table', 100); }, function () { return tabella('/summary/note/list', 'note_table', 100); }];
+          if (dettaglio.haFatture) ultimi.push(function () { return chiediJson('/retail/order/invoice/' + id + '/invoice?dataTableView=invoice_table&page=1&perPage=50'); });
+          return inFila(ultimi, 2).then(function (r3) {
+            dati.servizi = righe(r3[0]); dati.note = righe(r3[1]); dati.fatture = righe(r3[2]);
+            mostra();
+          });
+        });
+      }).catch(function () {
         if (mia !== richiesta) return;
         vista.classList.remove('ip-in-attesa');
-        disegnaOrdine('Non riesco a leggere questa vendita dal CRM. Controlla la rete e riprova.');
+        if (!dati) disegnaOrdine('Non riesco a leggere questa vendita dal CRM. Controlla la rete e riprova.');
         avvisa('errore');
       });
     }
@@ -4471,16 +4493,30 @@ window.__IP_MODIFICA=true;
     }
     function negaAccesso(id) {
       if (VOCE_ALTRO[id]) permessi.voci[id] = false; else permessi.sezioni[id] = false;
+      salvaPermessi();
       applicaPermessi();
     }
+    // Esiti ricordati per tutta la sessione dell'app: non si richiedono a ogni ricarica della pagina.
+    try { var permessiSalvati = JSON.parse(sessionStorage.getItem('ip-permessi') || 'null'); if (permessiSalvati) { permessi.sezioni = permessiSalvati.sezioni || {}; permessi.voci = permessiSalvati.voci || {}; permessi.vociControllate = !!permessiSalvati.vociControllate; } } catch (e) { /* si ricontrolla */ }
+    function salvaPermessi() { try { sessionStorage.setItem('ip-permessi', JSON.stringify({ sezioni: permessi.sezioni, voci: permessi.voci, vociControllate: permessi.vociControllate })); } catch (e) { /* non indispensabile */ } }
     function controllaPermessi() {
-      var nomi = Object.keys(PROVE_SEZIONI), voci = Object.keys(VOCE_ALTRO);
-      var richieste = nomi.map(function (n) { return prova(PROVE_SEZIONI[n]); }).concat(voci.map(function (id) { return prova(VOCE_ALTRO[id].prova); }));
-      return Promise.all(richieste).then(function (esiti) {
-        nomi.forEach(function (n, i) { if (esiti[i] !== null) permessi.sezioni[n] = esiti[i]; });
-        voci.forEach(function (id, i) { var e = esiti[nomi.length + i]; if (e !== null) permessi.voci[id] = e; });
+      var nomi = ['ordini', 'carrelli'].filter(function (n) { return permessi.sezioni[n] === undefined; });
+      if (!nomi.length) { applicaPermessi(); return Promise.resolve(); }
+      return inFila(nomi.map(function (n) { return function () { return prova(PROVE_SEZIONI[n]); }; }), 1).then(function (esiti) {
+        nomi.forEach(function (n, i) { if (esiti[i] !== null && esiti[i] !== undefined) permessi.sezioni[n] = esiti[i]; });
         permessi.controllati = true;
+        salvaPermessi();
         applicaPermessi();
+      });
+    }
+    // Le voci di Altro si controllano solo aprendo Altro, due alla volta.
+    function controllaVociAltro() {
+      if (permessi.vociControllate) return Promise.resolve();
+      var voci = Object.keys(VOCE_ALTRO);
+      return inFila(voci.map(function (id) { return function () { return prova(VOCE_ALTRO[id].prova); }; }), 2).then(function (esiti) {
+        voci.forEach(function (id, i) { if (esiti[i] !== null && esiti[i] !== undefined) permessi.voci[id] = esiti[i]; });
+        permessi.vociControllate = true;
+        salvaPermessi();
       });
     }
 
@@ -4500,7 +4536,13 @@ window.__IP_MODIFICA=true;
       if (daUtente) { try { history.replaceState(statoVista('altro'), '', location.pathname); } catch (e) { /* non indispensabile */ } }
       azioni.innerHTML = '';
       radice.classList.add('ip-senza-azioni');
-      disegnaAltro();
+      if (permessi.vociControllate) disegnaAltro();
+      else {
+        // Prima volta nella sessione: si controlla quali funzioni può usare l'utente, poi si mostra l'elenco.
+        vista.innerHTML = '';
+        caricamento(5);
+        controllaVociAltro().then(function () { if (vistaCarrelli === 'altro') disegnaAltro(); applicaPermessi(); });
+      }
       vista.scrollTop = 0;
     }
     function disegnaAltro() {
@@ -4700,12 +4742,14 @@ window.__IP_MODIFICA=true;
       var zona = zonaContenuto();
       caricamento(5);
       // Totale e, per ogni natura, numero di transazioni e importo: una richiesta leggera per ognuna (solo i conteggi).
-      Promise.all([chiediJson(indirizzoIncassi()), leggiMetodi()]).then(function (r) {
+      inFila([function () { return chiediJson(indirizzoIncassi()); }, leggiMetodi], 2).then(function (r) {
+        if (!r[0] || !r[1]) throw new Error('rete');
         if (mia !== richiesta) return;
         var tot = r[0];
         if (!tot.dati || tot.dati.filtered == null) { erroreDati(zona, tot, 'incassi'); vista.querySelector('.ip-finto') && vista.querySelector('.ip-finto').remove(); return; }
         var nature = r[1].nature;
-        return Promise.all(nature.map(function (n) { return chiediJson(indirizzoIncassi('&f%5Bmethod%5D=' + encodeURIComponent(n.v))); })).then(function (per) {
+        // Due nature alla volta, per non caricare il CRM.
+        return inFila(nature.map(function (n) { return function () { return chiediJson(indirizzoIncassi('&f%5Bmethod%5D=' + encodeURIComponent(n.v))); }; }), 2).then(function (per) {
           if (mia !== richiesta) return;
           var finto = vista.querySelector('.ip-finto'); if (finto) finto.remove();
           zona.innerHTML = '';
@@ -5019,10 +5063,11 @@ window.__IP_MODIFICA=true;
       var zona = zonaContenuto();
       caricamentoIn(zona);
       var c = CONFIG[id];
-      var richieste = [chiediJson(c.indirizzo + '?dataTableView=' + c.tabella + '&page=1&perPage=500')];
+      var lavori = [function () { return chiediJson(c.indirizzo + '?dataTableView=' + c.tabella + '&page=1&perPage=500'); }];
       // Per le casse servono anche i nomi di stampanti e terminali (la tabella ha solo gli indirizzi IP).
-      if (id === 'casse') richieste.push(chiediJson('/retail/printer?dataTableView=printer_table&page=1&perPage=500').catch(function () { return {}; }), chiediJson('/retail/terminal?dataTableView=terminal_table&page=1&perPage=500').catch(function () { return {}; }));
-      Promise.all(richieste).then(function (r) {
+      if (id === 'casse') lavori.push(function () { return chiediJson('/retail/printer?dataTableView=printer_table&page=1&perPage=500'); }, function () { return chiediJson('/retail/terminal?dataTableView=terminal_table&page=1&perPage=500'); });
+      inFila(lavori, 2).then(function (r) {
+        if (!r[0]) throw new Error('rete');
         if (mia !== richiesta) return;
         if (!r[0].dati || !r[0].dati.rows) { erroreDati(zona, r[0], id); return; }
         zona.innerHTML = '';
@@ -5311,42 +5356,55 @@ window.__IP_MODIFICA=true;
     function moduloArticolo(id, percorso) {
       return chiedi('/product/' + id + percorso).then(function (r) { return { doc: r.doc, gruppi: leggiModulo(r.doc), percorso: r.percorso }; }, function () { return null; });
     }
+    // Apertura veloce: solo riepilogo (codici, prezzi, costo, IVA, giacenza) e dati tecnici (codici secondari).
+    // Le sezioni Dati, Magazzino e Vendite si leggono solo quando si toccano; la galleria arriva dopo, da sola.
     function mostraArticolo(s) {
       var mia = richiesta;
       var id = s.prodotto;
-      var base = catalogo.perId[id] || null;
       var zona = zonaContenuto();
-      if (base) disegnaArticolo(zona, id, base, null);
-      else caricamentoIn(zona);
-      Promise.all([
-        chiedi('/product/' + id),
-        moduloArticolo(id, '/edit'),
-        moduloArticolo(id, '/edit/technical'),
-        moduloArticolo(id, '/edit/prices'),
-        moduloArticolo(id, '/edit/measures'),
-        moduloArticolo(id, '/edit/ecommerce'),
-        tabellaArticolo(id, '/availability/list', 'availability_table', 200),
-        tabellaArticolo(id, '/order/list', 'order_table', 30, 'order_createdAt:desc'),
-        tabellaArticolo(id, '/movement/list', 'movement_table', 30, 'createdAt:desc'),
-        tabellaArticolo(id, '/cost/list', 'cost_table', 30),
-        tabellaArticolo(id, '/summary/attribute/list', 'ordered_attribute_table', 100),
-        tabellaArticolo(id, '/attachment/list', 'attachment_table', 100),
-        chiediJson('/product?dataTableView=product_table&f%5Bsearch%5D=' + encodeURIComponent(base ? (base.ean || base.code) : '') + '&page=1&perPage=20').then(function (r) { return r.dati; }, function () { return null; }),
-        chiedi('/product/' + id + '/gallery-image/list').then(function (g) { return leggiGalleria(g.doc); }, function () { return []; })
-      ]).then(function (r) {
+      var d = { id: id, base: catalogo.perId[id] || null, mia: mia, zona: zona, pronto: false, parti: {}, caricate: {} };
+      catalogo.aperto = d;
+      disegnaArticolo(d);
+      Promise.all([chiedi('/product/' + id), moduloArticolo(id, '/edit/technical')]).then(function (r) {
         if (mia !== richiesta) return;
         if (/\/login$/.test(r[0].percorso)) { location.reload(); return; }
         if (r[0].percorso.indexOf('/product/' + id) !== 0) { zona.innerHTML = ''; zona.appendChild(el('div', 'ip-vuoto', 'Il tuo utente non ha accesso a questo articolo.')); return; }
-        // La riga dell'elenco (foto, codici, EAN secondari) se non c'era già.
-        if (!base && r[12] && r[12].rows) base = r[12].rows.filter(function (x) { return String(x.id) === id; })[0] || null;
-        var dati = {
-          riepilogo: leggiRiepilogoArticolo(r[0].doc), dettagli: r[1], tecnici: r[2], prezzi: r[3], misure: r[4], ecommerce: r[5],
-          giacenze: r[6], vendite: r[7], movimenti: r[8], costi: r[9], attributi: r[10], allegati: r[11], galleria: r[13] || []
-        };
-        disegnaArticolo(zona, id, base, dati);
+        d.riepilogo = leggiRiepilogoArticolo(r[0].doc);
+        d.tecnici = r[1];
+        d.pronto = true;
+        d.caricate.scheda = true;
+        disegnaArticolo(d);
+        chiedi('/product/' + id + '/gallery-image/list').then(function (g) {
+          d.galleria = leggiGalleria(g.doc);
+          if (mia === richiesta && d.galleria.length) disegnaParte(d, 'scheda');
+        }, function () { /* senza galleria */ });
       }, function () { if (mia === richiesta) erroreDati(zona, null); });
     }
-
+    // Legge i dati di una sezione la prima volta che si apre.
+    function caricaParte(d, k) {
+      if (d.caricate[k] || d.inCarico === k) return;
+      var id = d.id, mia = richiesta;
+      d.inCarico = k;
+      var richieste;
+      if (k === 'dati') richieste = [function () { return moduloArticolo(id, '/edit'); }, function () { return moduloArticolo(id, '/edit/measures'); }, function () { return moduloArticolo(id, '/edit/ecommerce'); }, function () { return tabellaArticolo(id, '/summary/attribute/list', 'ordered_attribute_table', 100); }, function () { return tabellaArticolo(id, '/attachment/list', 'attachment_table', 100); }];
+      else if (k === 'magazzino') richieste = [function () { return tabellaArticolo(id, '/availability/list', 'availability_table', 200); }, function () { return tabellaArticolo(id, '/movement/list', 'movement_table', 30, 'createdAt:desc'); }];
+      else if (k === 'vendite') richieste = [function () { return tabellaArticolo(id, '/order/list', 'order_table', 30, 'order_createdAt:desc'); }, function () { return tabellaArticolo(id, '/cost/list', 'cost_table', 30); }];
+      else return;
+      // Mai più di due richieste insieme.
+      inFila(richieste, 2).then(function (r) {
+        if (r.some(function (x) { return x === null; })) throw new Error('rete');
+        if (mia !== richiesta || catalogo.aperto !== d) return;
+        if (k === 'dati') { d.dettagli = r[0]; d.misure = r[1]; d.ecommerce = r[2]; d.attributi = r[3]; d.allegati = r[4]; }
+        else if (k === 'magazzino') { d.giacenze = r[0]; d.movimenti = r[1]; }
+        else { d.vendite = r[0]; d.costi = r[1]; }
+        d.caricate[k] = true;
+        d.inCarico = null;
+        disegnaParte(d, k);
+      }, function () {
+        d.inCarico = null;
+        if (d.parti[k]) { d.parti[k].innerHTML = ''; d.parti[k].appendChild(el('div', 'ip-vuoto', 'Non riesco a leggere questa sezione. Riprova.')); }
+      });
+    }
     // Immagini della galleria: sono le anteprime dentro il riquadro di caricamento del CRM.
     function leggiGalleria(doc) {
       var zona = doc.querySelector('oneam-dropzone') || doc.querySelector('.console-page-body');
@@ -5391,15 +5449,16 @@ window.__IP_MODIFICA=true;
     function valoreModulo(m, etichetta) { var c = coppieModulo(m).filter(function (x) { return x[0].toLowerCase() === etichetta.toLowerCase(); })[0]; return c && c[1] !== '—' ? c[1] : ''; }
     function numeroIt(t) { var n = parseFloat(String(t || '').replace(/[^\d,.\-]/g, '').replace(/\./g, '').replace(',', '.')); return isNaN(n) ? null : n; }
 
-    function disegnaArticolo(zona, id, base, d) {
+    // Testata e numeri principali (subito, con i dati dell'elenco), poi il selettore delle quattro sezioni.
+    function disegnaArticolo(d) {
+      var zona = d.zona, base = d.base, riep = d.riepilogo;
       zona.innerHTML = '';
-      var riep = d && d.riepilogo;
-      var descrizione = (d && valoreModulo(d.dettagli, 'Descrizione')) || (base && pulisci(base.description)) || '';
-      var codice = (d && valoreModulo(d.tecnici, 'Codice')) || (base && base.code) || '';
-      var ean = (d && valoreModulo(d.tecnici, 'EAN')) || (base && base.ean) || '';
-      var secondario = d ? valoreModulo(d.tecnici, 'Codice secondario') : '';
+      var titoloRiep = riep && riep.titolo ? riep.titolo.replace(/^\S+\s+-\s+\S+\s+/, '') : '';
+      var descrizione = (base && pulisci(base.description)) || titoloRiep || '';
+      var artRiep = riep && riep.sezioni['Articolo'];
+      var codice = valoreModulo(d.tecnici, 'Codice') || valoreDi(artRiep, 'Codice') || (base && base.code) || '';
+      var ean = valoreModulo(d.tecnici, 'EAN') || valoreDi(artRiep, 'EAN') || (base && base.ean) || '';
 
-      // Testata: foto grande, descrizione e codici toccabili.
       var testa = el('div', 'ip-scheda ip-articolo-testa');
       var foto = fotoArticolo(base) || (riep && riep.foto) || '';
       var cornice = miniatura(foto, 'ip-foto ip-articolo-foto');
@@ -5411,29 +5470,29 @@ window.__IP_MODIFICA=true;
       if (codice) codici.appendChild(codiceToccabile(codice, codice, descrizione));
       if (ean) codici.appendChild(codiceToccabile(ean, ean, descrizione));
       testi.appendChild(codici);
-      var fornitore = (d && valoreModulo(d.tecnici, 'Fornitore')) || (base && pulisci(base.supplier_companyName || '')) || '';
+      var fornitore = valoreDi(artRiep, 'Fornitore') || (base && pulisci(base.supplier_companyName || '')) || '';
       if (fornitore) testi.appendChild(el('div', 'ip-riga-sotto', fornitore));
       testa.appendChild(testi);
       zona.appendChild(testa);
 
-      // Numeri principali: prezzo e giacenza, poi venduto.
-      var prezzi = d && d.prezzi;
-      var listino = numeroIt(valoreModulo(prezzi, 'Prezzo di listino (iva inclusa)')), prezzo = numeroIt(valoreModulo(prezzi, 'Prezzo (iva inclusa)')), scontato = numeroIt(valoreModulo(prezzi, 'Prezzo scontato (IC)'));
-      if (!d && base) { listino = +base.listingPrice || null; prezzo = +base.price || null; scontato = base.discountedPrice !== '' && base.discountedPrice != null ? +base.discountedPrice : null; }
+      var pr = riep && riep.sezioni['Prezzi'];
+      var listino, prezzo, scontato;
+      if (pr) { listino = numeroIt(valoreDi(pr, 'Prezzo di listino')); prezzo = numeroIt(valoreDi(pr, 'Prezzo')); scontato = numeroIt(valoreDi(pr, 'Prezzo scontato')); }
+      else if (base) { listino = +base.listingPrice || null; prezzo = +base.price || null; scontato = base.discountedPrice !== '' && base.discountedPrice != null ? +base.discountedPrice : null; }
       var finale = scontato != null ? scontato : prezzo;
       var coppia = el('div', 'ip-coppia');
       var tp = el('div', 'ip-scheda ip-numero ip-numero-prezzo');
       tp.appendChild(el('div', 'ip-numero-nome', scontato != null ? 'Prezzo scontato' : 'Prezzo'));
-      tp.appendChild(el('div', 'ip-numero-valore', finale != null ? soldi(finale) : '—'));
+      tp.appendChild(el('div', 'ip-numero-valore', finale != null ? soldi(finale) : '…'));
       if (listino != null && finale != null && listino - finale > 0.004) tp.appendChild(el('div', 'ip-totale-periodo', 'Listino ' + soldi(listino) + ' · sconto ' + Math.round((1 - finale / listino) * 100) + '%'));
       coppia.appendChild(tp);
-      var giacenza = d && riep ? numeroIt(valoreDi(riep.sezioni['Giacenza'], 'Disponibilità totale')) : (base ? +base.totalAvailability : null);
+      var giacenza = riep ? numeroIt(valoreDi(riep.sezioni['Giacenza'], 'Disponibilità totale')) : (base ? +base.totalAvailability : null);
       var tg = el('div', 'ip-scheda ip-numero' + (giacenza != null && giacenza <= 0 ? ' es-attenzione' : ''));
       tg.appendChild(el('div', 'ip-numero-nome', 'Giacenza'));
       tg.appendChild(el('div', 'ip-numero-valore ip-numero-medio', giacenza != null ? String(giacenza) : '…'));
       coppia.appendChild(tg);
       zona.appendChild(coppia);
-      if (!d) { caricamentoIn(zona); return; }
+      if (!d.pronto) { caricamentoIn(zona); return; }
       if (riep && (riep.numeri['Totale venduto IE'] || riep.numeri['Prodotti venduti'])) {
         var tessere = el('div', 'ip-tessere');
         [['Totale venduto IE', riep.numeri['Totale venduto IE']], ['Pezzi venduti', riep.numeri['Prodotti venduti']]].forEach(function (x) {
@@ -5446,32 +5505,51 @@ window.__IP_MODIFICA=true;
         zona.appendChild(tessere);
       }
 
-      // Le informazioni sono tante: divise in quattro sezioni con un selettore (su iPhone quello di sistema).
+      // Quattro sezioni con un selettore (su iPhone quello di sistema). Ogni sezione si legge solo quando si apre.
       var SEZIONI_ARTICOLO = [['scheda', 'Scheda'], ['dati', 'Dati'], ['magazzino', 'Magazzino'], ['vendite', 'Vendite']];
       if (!catalogo.sezione) catalogo.sezione = 'scheda';
       var selettore = el('div', 'ip-segmenti ip-segmenti-articolo');
-      var parti = {};
-      SEZIONI_ARTICOLO.forEach(function (p) {
-        var b = el('button', catalogo.sezione === p[0] ? 'ip-scelto' : '', p[1]);
+      d.parti = {};
+      SEZIONI_ARTICOLO.forEach(function (sz) {
+        var b = el('button', catalogo.sezione === sz[0] ? 'ip-scelto' : '', sz[1]);
         b.type = 'button';
         b.addEventListener('click', function () {
-          if (catalogo.sezione === p[0]) return;
-          catalogo.sezione = p[0];
-          for (var i = 0; i < selettore.children.length; i++) selettore.children[i].classList.toggle('ip-scelto', SEZIONI_ARTICOLO[i][0] === p[0]);
-          Object.keys(parti).forEach(function (k) { parti[k].hidden = k !== p[0]; });
+          if (catalogo.sezione === sz[0]) return;
+          catalogo.sezione = sz[0];
+          for (var i = 0; i < selettore.children.length; i++) selettore.children[i].classList.toggle('ip-scelto', SEZIONI_ARTICOLO[i][0] === sz[0]);
+          Object.keys(d.parti).forEach(function (k) { d.parti[k].hidden = k !== sz[0]; });
+          if (!d.parti[sz[0]].children.length) disegnaParte(d, sz[0]);
         });
         selettore.appendChild(b);
       });
       zona.appendChild(selettore);
-      SEZIONI_ARTICOLO.forEach(function (p) { parti[p[0]] = el('div', 'ip-parte-articolo'); parti[p[0]].hidden = catalogo.sezione !== p[0]; zona.appendChild(parti[p[0]]); });
+      SEZIONI_ARTICOLO.forEach(function (sz) { d.parti[sz[0]] = el('div', 'ip-parte-articolo'); d.parti[sz[0]].hidden = catalogo.sezione !== sz[0]; zona.appendChild(d.parti[sz[0]]); });
+      disegnaParte(d, catalogo.sezione);
+    }
 
+    // Contenuto di una sezione: se i suoi dati non ci sono ancora, li legge (e intanto mostra il caricamento).
+    function disegnaParte(d, k) {
+      var p = d.parti[k];
+      if (!p) return;
+      p.innerHTML = '';
+      if (!d.caricate[k]) { caricamentoIn(p); caricaParte(d, k); return; }
+      var zona = d.zona, id = d.id, base = d.base, riep = d.riepilogo, tecnici = d.tecnici;
+      var artRiep = riep && riep.sezioni['Articolo'];
+      var descrizione = valoreModulo(d.dettagli, 'Descrizione') || (base && pulisci(base.description)) || '';
+      var codice = valoreModulo(tecnici, 'Codice') || valoreDi(artRiep, 'Codice') || (base && base.code) || '';
+      var ean = valoreModulo(tecnici, 'EAN') || valoreDi(artRiep, 'EAN') || (base && base.ean) || '';
+      var secondario = valoreModulo(tecnici, 'Codice secondario');
+      var prezzi = riep && riep.sezioni['Prezzi'];
+      var listino = numeroIt(valoreDi(prezzi, 'Prezzo di listino')), prezzo = numeroIt(valoreDi(prezzi, 'Prezzo')), scontato = numeroIt(valoreDi(prezzi, 'Prezzo scontato'));
+      var finale = scontato != null ? scontato : prezzo;
+      if (k === 'scheda') {
       // Codici: modificabili, anche dalla fotocamera. Gli EAN secondari sono una lista: se ne aggiungono quanti si vuole.
       var tecnici = d.tecnici;
       if (tecnici) {
         var secondari = eanSecondari(tecnici.doc);
         var voci = [['Codice', codice || '—', { modifica: 'code' }], ['Codice secondario', secondario || '—', { modifica: 'secondaryCode' }], ['EAN', ean || '—', { modifica: 'ean' }]];
         secondari.forEach(function (e, n) { voci.push([secondari.length > 1 ? 'EAN secondario ' + (n + 1) : 'EAN secondario', e, { modifica: 'secondaryEans', indice: n }]); });
-        var boxCodici = gruppoDati(parti.scheda, 'Codici', voci.map(function (v) { return [v[0], v[1]]; }), true);
+        var boxCodici = gruppoDati(p, 'Codici', voci.map(function (v) { return [v[0], v[1]]; }), true);
         if (boxCodici) boxCodici.classList.add('ip-dati-codici');
         if (boxCodici) {
           var righeCodici = boxCodici.querySelectorAll('.ip-dato');
@@ -5491,7 +5569,7 @@ window.__IP_MODIFICA=true;
 
       // Galleria immagini: toccandone una si apre grande.
       if (d.galleria && d.galleria.length) {
-        parti.scheda.appendChild(el('div', 'ip-etichetta', 'Immagini · ' + d.galleria.length));
+        p.appendChild(el('div', 'ip-etichetta', 'Immagini · ' + d.galleria.length));
         var striscia = el('div', 'ip-galleria');
         d.galleria.forEach(function (src) {
           var img = document.createElement('img');
@@ -5500,13 +5578,13 @@ window.__IP_MODIFICA=true;
           img.addEventListener('error', function () { img.remove(); });
           striscia.appendChild(img);
         });
-        parti.scheda.appendChild(striscia);
+        p.appendChild(striscia);
       }
 
       // Prezzi: costo e margine nascosti finché non si toccano (come nella scheda prodotto).
       if (prezzi) {
-        var costo = numeroIt(valoreModulo(prezzi, 'Costo (iva esclusa)'));
-        var iva = valoreModulo(prezzi, '% IVA');
+        var costo = numeroIt(valoreDi(prezzi, 'Costo'));
+        var iva = valoreDi(prezzi, 'IVA');
         var aliquota = numeroIt(iva) || 22;
         var margine = costo != null && finale ? Math.round((1 - costo / (finale / (1 + aliquota / 100))) * 1000) / 10 : null;
         var nascosto = function (testo) {
@@ -5517,16 +5595,47 @@ window.__IP_MODIFICA=true;
           b.addEventListener('click', function () { catalogo.costoVisibile = !catalogo.costoVisibile; var tutti = zona.querySelectorAll('.ip-riservato'); for (var i = 0; i < tutti.length; i++) tutti[i].classList.toggle('ip-visibile', catalogo.costoVisibile); });
           return b;
         };
-        gruppoDati(parti.scheda, 'Prezzi', [
+        gruppoDati(p, 'Prezzi', [
           ['Prezzo di listino', listino != null ? soldi(listino) : '—'], ['Prezzo', prezzo != null ? soldi(prezzo) : '—'], ['Prezzo scontato', scontato != null ? soldi(scontato) : '—'],
           ['IVA', iva || '—'], ['Costo (IVA esclusa)', costo != null ? nascosto(soldi(costo)) : '—'], ['Margine sul prezzo', margine != null ? nascosto(String(margine).replace('.', ',') + '%') : '—']
         ], true);
       }
 
+      }
+      if (k === 'dati') {
+      // Classificazione e opzioni (dati tecnici senza i codici)
+      if (tecnici) gruppoDati(p, 'Classificazione', coppieModulo(tecnici).filter(function (c) { return !/^(codice|codice secondario|ean|ean secondari)$/i.test(c[0]) && !/^\d{8,14}$/.test(c[0]); }), true);
+      // Descrizioni (dettagli)
+      if (d.dettagli) gruppoDati(p, 'Descrizioni', coppieModulo(d.dettagli), false);
+      // Misure: solo quelle compilate, con il gruppo (articolo o imballo) nel nome
+      if (d.misure) {
+        var misure = [];
+        d.misure.gruppi.forEach(function (g) { g.righe.forEach(function (c) { if (c[1] && c[1] !== '—') misure.push([(g.nome && !/^dati$/i.test(g.nome) ? g.nome + ' · ' : '') + c[0], c[1]]); }); });
+        if (misure.length) gruppoDati(p, 'Misure', misure, false);
+        else { p.appendChild(el('div', 'ip-etichetta', 'Misure')); p.appendChild(el('div', 'ip-scheda ip-vuoto ip-vuoto-scheda', 'Nessuna misura inserita.')); }
+      }
+      // Attributi
+      var attr = d.attributi && d.attributi.rows || [];
+      if (attr.length) gruppoDati(p, 'Attributi', attr.map(function (x) {
+        var nome = x.attribute_name || x.name || x.attribute || '', valore = x.value || x.attributeValue_value || x.values || '';
+        if (!nome) { var k = Object.keys(x).filter(function (q) { return typeof x[q] === 'string' && !/url$/i.test(q); }); nome = x[k[0]] || 'Attributo'; valore = x[k[1]] || ''; }
+        return [pulisci(String(nome)), pulisci(Array.isArray(valore) ? valore.join(', ') : String(valore))];
+      }), true);
+      // E-commerce
+      if (d.ecommerce) {
+        var web = coppieModulo(d.ecommerce).map(function (c) { return [c[0], c[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() || '—']; });
+        gruppoDati(p, 'E-commerce', web, false);
+      }
+
+      // Allegati
+      var all = d.allegati && d.allegati.rows || [];
+      if (all.length) gruppoDati(p, 'Allegati', all.map(function (x) { return [pulisci(x.name || x.fileName || x.originalName || 'Allegato'), pulisci(x.createdAt || x.type || '')]; }), true);
+      }
+      if (k === 'magazzino') {
       // Giacenze per magazzino
       var giac = d.giacenze && d.giacenze.rows || [];
       if (giac.length) {
-        parti.magazzino.appendChild(el('div', 'ip-etichetta', 'Giacenze per magazzino'));
+        p.appendChild(el('div', 'ip-etichetta', 'Giacenze per magazzino'));
         var gl = el('div', 'ip-scheda ip-dati');
         giac.forEach(function (x) {
           var r = el('div', 'ip-dato ip-dato-doppio');
@@ -5538,41 +5647,42 @@ window.__IP_MODIFICA=true;
           r.appendChild(el('span', 'ip-dato-valore ip-giacenza' + ((+x.quantity || 0) <= 0 ? ' ip-zero' : ''), String(x.quantity)));
           gl.appendChild(r);
         });
-        parti.magazzino.appendChild(gl);
+        p.appendChild(gl);
       }
       var riepGiac = riep && riep.sezioni['Giacenza'];
-      if (riepGiac) gruppoDati(parti.magazzino, 'Disponibilità', riepGiac.righe, false);
+      if (riepGiac) gruppoDati(p, 'Disponibilità', riepGiac.righe, false);
 
-      // Classificazione e opzioni (dati tecnici senza i codici)
-      if (tecnici) gruppoDati(parti.dati, 'Classificazione', coppieModulo(tecnici).filter(function (c) { return !/^(codice|codice secondario|ean|ean secondari)$/i.test(c[0]) && !/^\d{8,14}$/.test(c[0]); }), true);
-      // Descrizioni (dettagli)
-      if (d.dettagli) gruppoDati(parti.scheda, 'Descrizioni', coppieModulo(d.dettagli), false);
-      // Misure: solo quelle compilate, con il gruppo (articolo o imballo) nel nome
-      if (d.misure) {
-        var misure = [];
-        d.misure.gruppi.forEach(function (g) { g.righe.forEach(function (c) { if (c[1] && c[1] !== '—') misure.push([(g.nome && !/^dati$/i.test(g.nome) ? g.nome + ' · ' : '') + c[0], c[1]]); }); });
-        if (misure.length) gruppoDati(parti.dati, 'Misure', misure, false);
-        else { parti.dati.appendChild(el('div', 'ip-etichetta', 'Misure')); parti.dati.appendChild(el('div', 'ip-scheda ip-vuoto ip-vuoto-scheda', 'Nessuna misura inserita.')); }
+      // Movimenti di magazzino
+      var mov = d.movimenti && d.movimenti.rows || [];
+      if (mov.length) {
+        p.appendChild(el('div', 'ip-etichetta', 'Movimenti di magazzino'));
+        var ml = el('div', 'ip-scheda ip-dati');
+        mov.forEach(function (x) {
+          var r = el('div', 'ip-dato ip-dato-doppio');
+          var n = el('span', 'ip-dato-nome');
+          n.appendChild(el('b', '', pulisci(x.reason && x.reason.value || 'Movimento')));
+          n.appendChild(el('small', '', [pulisci(x.createdAt || ''), pulisci(x.warehouse_name || ''), pulisci(x.createdBy_name || '')].filter(Boolean).join(' · ')));
+          r.appendChild(n);
+          var qta = String(x.quantity || '');
+          r.appendChild(el('span', 'ip-dato-valore' + (/^-/.test(qta) ? ' ip-negativo' : ' ip-positivo'), qta));
+          ml.appendChild(r);
+        });
+        p.appendChild(ml);
+        var totMov = d.movimenti.filtered || mov.length;
+        if (totMov > mov.length) p.appendChild(tastoAltre(totMov - mov.length, false, function () {
+          this.disabled = true; this.textContent = 'Carico…';
+          var dove = vista.scrollTop;
+          piuRigheArticolo(id, d, 'movimenti').then(function () { disegnaParte(d, 'magazzino'); vista.scrollTop = dove; });
+        }, 30));
       }
-      // Attributi
-      var attr = d.attributi && d.attributi.rows || [];
-      if (attr.length) gruppoDati(parti.dati, 'Attributi', attr.map(function (x) {
-        var nome = x.attribute_name || x.name || x.attribute || '', valore = x.value || x.attributeValue_value || x.values || '';
-        if (!nome) { var k = Object.keys(x).filter(function (q) { return typeof x[q] === 'string' && !/url$/i.test(q); }); nome = x[k[0]] || 'Attributo'; valore = x[k[1]] || ''; }
-        return [pulisci(String(nome)), pulisci(Array.isArray(valore) ? valore.join(', ') : String(valore))];
-      }), true);
-      // E-commerce
-      if (d.ecommerce) {
-        var web = coppieModulo(d.ecommerce).map(function (c) { return [c[0], c[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() || '—']; });
-        gruppoDati(parti.dati, 'E-commerce', web, false);
       }
-
+      if (k === 'vendite') {
       // Ultime vendite
       var vend = d.vendite && d.vendite.rows || [];
       if (vend.length) {
         var tot = d.vendite.filtered || vend.length;
-        parti.vendite.appendChild(el('div', 'ip-etichetta ip-giorno', '')).appendChild(el('span', '', 'Ultime vendite'));
-        parti.vendite.lastChild.appendChild(el('span', 'ip-giorno-totale', interoItaliano(tot) + (tot === 1 ? ' vendita' : ' vendite') + (d.vendite.additionalData && d.vendite.additionalData.totalFinalPrice ? ' · ' + euro(+d.vendite.additionalData.totalFinalPrice) : '')));
+        p.appendChild(el('div', 'ip-etichetta ip-giorno', '')).appendChild(el('span', '', 'Ultime vendite'));
+        p.lastChild.appendChild(el('span', 'ip-giorno-totale', interoItaliano(tot) + (tot === 1 ? ' vendita' : ' vendite') + (d.vendite.additionalData && d.vendite.additionalData.totalFinalPrice ? ' · ' + euro(+d.vendite.additionalData.totalFinalPrice) : '')));
         var vl = el('div', 'ip-scheda ip-lista');
         vend.forEach(function (x) {
           var riga = crea('button', 'ip-riga ip-riga-ordine');
@@ -5591,45 +5701,19 @@ window.__IP_MODIFICA=true;
           if (x.order_id) riga.addEventListener('click', function () { apriVenditaDaAltro(x.order_id); });
           vl.appendChild(riga);
         });
-        parti.vendite.appendChild(vl);
-        if (tot > vend.length) parti.vendite.appendChild(tastoAltre(tot - vend.length, false, function () {
+        p.appendChild(vl);
+        if (tot > vend.length) p.appendChild(tastoAltre(tot - vend.length, false, function () {
           this.disabled = true; this.textContent = 'Carico…';
           var dove = vista.scrollTop;
-          piuRigheArticolo(id, d, 'vendite').then(function () { disegnaArticolo(zona, id, base, d); vista.scrollTop = dove; });
-        }, 30));
-      }
-      // Movimenti di magazzino
-      var mov = d.movimenti && d.movimenti.rows || [];
-      if (mov.length) {
-        parti.magazzino.appendChild(el('div', 'ip-etichetta', 'Movimenti di magazzino'));
-        var ml = el('div', 'ip-scheda ip-dati');
-        mov.forEach(function (x) {
-          var r = el('div', 'ip-dato ip-dato-doppio');
-          var n = el('span', 'ip-dato-nome');
-          n.appendChild(el('b', '', pulisci(x.reason && x.reason.value || 'Movimento')));
-          n.appendChild(el('small', '', [pulisci(x.createdAt || ''), pulisci(x.warehouse_name || ''), pulisci(x.createdBy_name || '')].filter(Boolean).join(' · ')));
-          r.appendChild(n);
-          var qta = String(x.quantity || '');
-          r.appendChild(el('span', 'ip-dato-valore' + (/^-/.test(qta) ? ' ip-negativo' : ' ip-positivo'), qta));
-          ml.appendChild(r);
-        });
-        parti.magazzino.appendChild(ml);
-        var totMov = d.movimenti.filtered || mov.length;
-        if (totMov > mov.length) parti.magazzino.appendChild(tastoAltre(totMov - mov.length, false, function () {
-          this.disabled = true; this.textContent = 'Carico…';
-          var dove = vista.scrollTop;
-          piuRigheArticolo(id, d, 'movimenti').then(function () { disegnaArticolo(zona, id, base, d); vista.scrollTop = dove; });
+          piuRigheArticolo(id, d, 'vendite').then(function () { disegnaParte(d, 'vendite'); vista.scrollTop = dove; });
         }, 30));
       }
       // Storico costi
       var costi = d.costi && d.costi.rows || [];
-      if (costi.length) gruppoDati(parti.vendite, 'Storico costi', costi.map(function (x) { return [pulisci(x.order_createdAt || ''), pulisci(String(x.cost || ''))]; }), true);
-      // Allegati
-      var all = d.allegati && d.allegati.rows || [];
-      if (all.length) gruppoDati(parti.dati, 'Allegati', all.map(function (x) { return [pulisci(x.name || x.fileName || x.originalName || 'Allegato'), pulisci(x.createdAt || x.type || '')]; }), true);
-      // Una sezione rimasta senza dati lo dice, invece di restare vuota.
-      Object.keys(parti).forEach(function (k) { if (!parti[k].children.length) parti[k].appendChild(el('div', 'ip-vuoto', k === 'vendite' ? 'Nessuna vendita di questo articolo.' : 'Nessun dato in questa sezione.')); });
-      parti.scheda.appendChild(el('div', 'ip-nota-piccola', 'Prezzi, giacenze e descrizioni si modificano dal CRM; da qui si modificano solo i codici.'));
+      if (costi.length) gruppoDati(p, 'Storico costi', costi.map(function (x) { return [pulisci(x.order_createdAt || ''), pulisci(String(x.cost || ''))]; }), true);
+      }
+      if (!p.children.length) p.appendChild(el('div', 'ip-vuoto', k === 'vendite' ? 'Nessuna vendita di questo articolo.' : 'Nessun dato in questa sezione.'));
+      if (k === 'scheda') p.appendChild(el('div', 'ip-nota-piccola', 'Prezzi, giacenze e descrizioni si modificano dal CRM; da qui si modificano solo i codici.'));
     }
 
     // ---------- Modifica di un codice (codice, codice secondario, EAN o EAN secondario) ----------
@@ -5793,7 +5877,7 @@ window.__IP_MODIFICA=true;
 
     // ---------- Avvio ----------
     // Subito dopo l'avvio, in silenzio: quali sezioni e funzioni può usare questo utente.
-    setTimeout(function () { controllaPermessi().catch(function () { /* restano tutte visibili */ }); }, 400);
+    setTimeout(function () { controllaPermessi().catch(function () { /* restano tutte visibili */ }); }, 2500);
     if (tipo === 'scheda') {
       var qui = leggiProdotto(document, m[1]);
       if (qui) {
