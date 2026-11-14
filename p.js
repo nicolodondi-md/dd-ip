@@ -4248,7 +4248,9 @@ window.__IP_MODIFICA=true;
         var lista = el('div', 'ip-scheda ip-lista');
         d.prodotti.forEach(function (x) {
           var riga = el('div', 'ip-riga ip-riga-venduto');
-          riga.appendChild(miniatura(x.product_image && x.product_image.src, 'ip-mini'));
+          // Senza foto il CRM manda un disegno segnaposto su fondo bianco: meglio il nostro, che segue il tema.
+          var foto = x.product_image && x.product_image.src && !/^data:image\/svg/.test(x.product_image.src) ? x.product_image.src : '';
+          riga.appendChild(miniatura(foto, 'ip-mini'));
           var testi = el('span', 'ip-riga-testi');
           testi.appendChild(el('span', 'ip-riga-nome', pulisci(x.product_description || x.product_code || 'Prodotto')));
           var sotto = el('span', 'ip-venduto-sotto');
