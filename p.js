@@ -600,12 +600,13 @@ window.__IP_MODIFICA=true;
           radice: radice.classList.contains('ip-radice'), scheda: schede.getAttribute('data-scheda') || 'prodotti', titolo: titolo.textContent || '',
           indietro: radice.classList.contains('ip-su-prodotto'),
           // Nelle schermate dove si compila un modulo il campo del codice non serve e viene tolto.
-          segnaposto: (radice.classList.contains('ip-in-modifica') || vistaCarrelli === 'nuovo' || vistaCarrelli === 'cliente' || vistaCarrelli === 'vendite' || vistaCarrelli === 'scarico' || vistaCarrelli === 'ordine' || vistaCarrelli === 'altro' || vistaCarrelli === 'altro-voce') ? '' : (campo.getAttribute('placeholder') || ''),
+          segnaposto: (radice.classList.contains('ip-in-modifica') || vistaCarrelli === 'nuovo' || vistaCarrelli === 'cliente' || vistaCarrelli === 'vendite' || vistaCarrelli === 'scarico' || vistaCarrelli === 'ordine' || vistaCarrelli === 'altro' || (vistaCarrelli === 'altro-voce' && !cercaInAltro())) ? '' : (campo.getAttribute('placeholder') || ''),
           azioni: radice.classList.contains('ip-senza-azioni') ? [] : tasti, foglio: !!radice.querySelector('.ip-foglio, .ip-visore'),
           // Foto ingrandita: schermata immersiva, l'app nasconde barre e tasti finché non si tocca la foto.
           visore: !!radice.querySelector('.ip-visore'),
           colonna: radice.classList.contains('ip-colonna-possibile') ? (radice.classList.contains('ip-colonna-chiusa') ? 'chiusa' : 'aperta') : null,
           sezioni: sezioniVisibili(),
+          filtra: cercaInAltro() || null,
           vendite: vistaCarrelli === 'vendite' ? { periodo: vendite.periodo, iva: vendite.iva, sedi: vendite.sedi.length, cassa: !!vendite.stampante, confronto: confrontoValido(), confronti: confrontiPossibili() } : null
         });
         raccontaSelettori();
@@ -804,6 +805,7 @@ window.__IP_MODIFICA=true;
     });
     radice.querySelector('.ip-ricerca').addEventListener('submit', function (e) {
       e.preventDefault();
+      if (cercaInAltro()) { clearTimeout(attesaCercaOrdini); cercaAltro(campo.value); campo.blur(); chiudiTastiera(); return; }
       if (vistaCarrelli === 'ordini') {
         // Nell'elenco delle vendite il campo cerca per numero, cliente o importo (ricerca del CRM).
         clearTimeout(attesaCercaOrdini);
@@ -828,6 +830,12 @@ window.__IP_MODIFICA=true;
     });
     var attesaCercaOrdini = null;
     campo.addEventListener('input', function () {
+      if (cercaInAltro()) {
+        // Si cerca già mentre si scrive (linee guida Apple), con una piccola attesa per non chiedere a ogni lettera.
+        clearTimeout(attesaCercaOrdini);
+        attesaCercaOrdini = setTimeout(function () { if (cercaInAltro()) cercaAltro(campo.value); }, 450);
+        return;
+      }
       if (vistaCarrelli === 'ordini') {
         clearTimeout(attesaCercaOrdini);
         attesaCercaOrdini = setTimeout(function () {
@@ -4549,6 +4557,8 @@ window.__IP_MODIFICA=true;
       azioni.innerHTML = '';
       radice.classList.add('ip-senza-azioni', 'ip-senza-ricerca');
       var voce = VOCE_ALTRO[s.voce];
+      campo.setAttribute('placeholder', 'Codice o EAN');
+      campo.value = '';
       intestazioneInterna(s.titolo || (voce ? voce.titolo : 'Altro'));
       vista.innerHTML = '';
       vista.scrollTop = 0;
@@ -4802,17 +4812,8 @@ window.__IP_MODIFICA=true;
       });
     }
     function mostraVenduti() {
+      attivaRicercaAltro('Cerca codice, EAN o descrizione', venduti.cerca);
       var box = el('div', 'ip-ordini-filtri');
-      // Ricerca nella pagina: codice, EAN o descrizione (ricerca del CRM).
-      var cerca = el('form', 'ip-cerca-pagina ip-cerca-fissa');
-      var input = document.createElement('input');
-      input.type = 'search'; input.placeholder = 'Cerca codice, EAN o descrizione'; input.value = venduti.cerca;
-      input.setAttribute('enterkeyhint', 'search');
-      cerca.appendChild(input);
-      var attesa = null;
-      input.addEventListener('input', function () { clearTimeout(attesa); attesa = setTimeout(function () { if (input.value.trim() !== venduti.cerca) { venduti.cerca = input.value.trim(); caricaVenduti(true); } }, 500); });
-      cerca.addEventListener('submit', function (e) { e.preventDefault(); clearTimeout(attesa); venduti.cerca = input.value.trim(); input.blur(); caricaVenduti(true); });
-      vista.appendChild(cerca);
       var righe = filtriPeriodo(box, function () { aggiornaVoceAltro(); }, false);
       righe = el('div', 'ip-scheda ip-lista ip-filtri-righe');
       righe.appendChild(rigaFiltro('Provenienza', (FONTI.filter(function (f) { return f.v === venduti.fonte; })[0] || FONTI[0]).t, function () {
@@ -5149,6 +5150,30 @@ window.__IP_MODIFICA=true;
     var catalogo = { cerca: '', disponibili: '', categoria: '', fornitore: '', righe: [], pagina: 0, filtrati: 0, inCarico: false, opzioni: null, perId: {}, costoVisibile: false };
     var IC_FOTOCAMERA = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7v-1a2 2 0 0 1 2 -2h2"/><path d="M4 17v1a2 2 0 0 0 2 2h2"/><path d="M16 4h2a2 2 0 0 1 2 2v1"/><path d="M16 20h2a2 2 0 0 0 2 -2v-1"/><path d="M5 12h14"/></svg>';
 
+    // ---------- Ricerca dell'app dentro Altro (catalogo e prodotti venduti) ----------
+    function cercaInAltro() {
+      var st = altro && altro.stato;
+      return vistaCarrelli === 'altro-voce' && !!st && !st.prodotto && !st.modifica && (st.voce === 'catalogo' || st.voce === 'venduti');
+    }
+    function attivaRicercaAltro(segnaposto, valore) {
+      radice.classList.remove('ip-senza-ricerca');
+      campo.setAttribute('placeholder', segnaposto);
+      campo.value = valore || '';
+      // Tasto Scansiona nella barra in basso: il codice letto diventa la ricerca.
+      azioni.innerHTML = '';
+      azioni.appendChild(tastoAzione('ip-azione ip-azione-scan', IC.camera + '<b>Scansiona</b>', function () {
+        leggiCodiceVerso('Cerca un articolo', function (codice) { cercaAltro(codice, true); });
+      }));
+      radice.classList.remove('ip-senza-azioni');
+    }
+    function cercaAltro(testo, scritto) {
+      var q = String(testo || '').trim();
+      if (scritto) campo.value = q;
+      var st = altro.stato;
+      if (st.voce === 'catalogo') { if (q === catalogo.cerca && catalogo.righe.length) return; catalogo.cerca = q; caricaCatalogo(true); }
+      else if (st.voce === 'venduti') { if (q === venduti.cerca && venduti.righe.length) return; venduti.cerca = q; caricaVenduti(true); }
+    }
+
     // Lettore verso un campo: il prossimo codice letto (fotocamera o lettore a pistola) va lì, non alla ricerca.
     var lettoreVerso = null;
     function leggiCodiceVerso(titoloLettore, fai) {
@@ -5159,6 +5184,8 @@ window.__IP_MODIFICA=true;
       if (sito.camera) sito.camera.click();
     }
     function consegnaCodice(codice) {
+      // Nel catalogo e nei prodotti venduti un codice letto (anche dal lettore a pistola) diventa la ricerca.
+      if (!lettoreVerso && cercaInAltro()) { cercaAltro(codice, true); return true; }
       if (!lettoreVerso) return false;
       var fai = lettoreVerso;
       lettoreVerso = null;
@@ -5186,24 +5213,9 @@ window.__IP_MODIFICA=true;
     }
 
     function mostraCatalogo() {
+      // La ricerca è quella dell'app: su iPhone il campo di sistema in basso (sempre visibile), su Android la testata.
+      attivaRicercaAltro('Cerca codice, EAN o descrizione', catalogo.cerca);
       var box = el('div', 'ip-ordini-filtri');
-      var cerca = el('form', 'ip-cerca-pagina ip-cerca-con-tasto ip-cerca-fissa');
-      var input = document.createElement('input');
-      input.type = 'search'; input.placeholder = 'Cerca codice, EAN o descrizione'; input.value = catalogo.cerca;
-      input.setAttribute('enterkeyhint', 'search');
-      cerca.appendChild(input);
-      var leggi = crea('button', 'ip-tasto-fotocamera', IC_FOTOCAMERA);
-      leggi.type = 'button';
-      leggi.setAttribute('aria-label', 'Leggi il codice con la fotocamera');
-      leggi.addEventListener('click', function () {
-        leggiCodiceVerso('Cerca un articolo', function (codice) { input.value = codice; catalogo.cerca = codice; caricaCatalogo(true); });
-      });
-      cerca.appendChild(leggi);
-      var attesa = null;
-      input.addEventListener('input', function () { clearTimeout(attesa); attesa = setTimeout(function () { if (input.value.trim() !== catalogo.cerca) { catalogo.cerca = input.value.trim(); caricaCatalogo(true); } }, 500); });
-      cerca.addEventListener('submit', function (e) { e.preventDefault(); clearTimeout(attesa); catalogo.cerca = input.value.trim(); input.blur(); caricaCatalogo(true); });
-      // Fuori dal riquadro dei filtri, direttamente nella pagina: così resta fermo in alto per tutto l'elenco.
-      vista.appendChild(cerca);
       var segmenti = el('div', 'ip-segmenti ip-segmenti-stretti');
       [['', 'Tutti'], ['1', 'Disponibili'], ['0', 'Esauriti']].forEach(function (p) {
         var b = el('button', catalogo.disponibili === p[0] ? 'ip-scelto' : '', p[1]);
