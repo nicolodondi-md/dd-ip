@@ -4648,13 +4648,15 @@ window.__IP_MODIFICA=true;
     // ---------- Schermo largo (iPad, schermo interno di iPhone Duo) ----------
     // Lo decide l'app (classe di larghezza regolare), non la pagina: così pagina e barre native vanno d'accordo.
     var vociChieste = false;
+    var attesaPermessi = null;
     function impostaLargo(largo) {
       var prima = document.documentElement.classList.contains('ip-largo');
       document.documentElement.classList.toggle('ip-largo', largo);
       // Con la barra laterale servono subito le funzioni di Altro permesse: si controllano una volta sola, con calma.
       if (largo && !permessi.vociControllate && !vociChieste) {
         vociChieste = true;
-        setTimeout(function () { controllaVociAltro().then(applicaPermessi, function () { /* restano tutte */ }); }, 3000);
+        // Dopo i controlli dell'avvio, mai insieme a loro: al massimo due richieste alla volta.
+        setTimeout(function () { Promise.resolve(attesaPermessi).then(controllaVociAltro).then(applicaPermessi, function () { /* restano tutte */ }); }, 3000);
       }
       if (prima !== largo) { colonnaFirma = ''; aggiornaColonna(); }
     }
@@ -4943,6 +4945,8 @@ window.__IP_MODIFICA=true;
     function indirizzoAnalisi(id, pagina, quante, ordine) {
       var c = ANALISI[id], st = statoAnalisi(id);
       var q = c.pagina + '?dataTableView=' + c.tabella + '&f%5B' + (c.confronto ? 'soldRange' : 'range') + '%5D=' + encodeURIComponent(intervallo());
+      // Acquistato e venduto: lo stesso periodo vale per gli acquisti (senza, le quantità acquistate restano vuote).
+      if (c.confronto) q += '&f%5BboughtRange%5D=' + encodeURIComponent(intervallo());
       if (c.sedi) q += sediQuery(c.sedi);
       Object.keys(st.scelte).forEach(function (k) {
         var v = st.scelte[k];
@@ -6175,7 +6179,7 @@ window.__IP_MODIFICA=true;
 
     // ---------- Avvio ----------
     // Subito dopo l'avvio, in silenzio: quali sezioni e funzioni può usare questo utente.
-    setTimeout(function () { controllaPermessi().catch(function () { /* restano tutte visibili */ }); }, 2500);
+    setTimeout(function () { attesaPermessi = controllaPermessi().catch(function () { /* restano tutte visibili */ }); }, 2500);
     if (tipo === 'scheda') {
       var qui = leggiProdotto(document, m[1]);
       if (qui) {
