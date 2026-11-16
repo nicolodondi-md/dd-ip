@@ -4543,7 +4543,7 @@ window.__IP_MODIFICA=true;
         if (mia !== richiesta) return;
         clienti.inCarico = false;
         clienti.righe = righe;
-        clienti.limite = limite;
+        clienti.totale = limite;
         disegnaClienti();
       };
       var errore = function (r) { if (mia === richiesta) { clienti.inCarico = false; erroreDati(clienti.zona, r || null, 'clienti'); } };
@@ -4552,7 +4552,7 @@ window.__IP_MODIFICA=true;
           if (!r.dati || !r.dati.rows) { errore(r); return; }
           fatto(r.dati.rows.map(function (x) {
             return { id: clIdDa(x.summaryUrl), nome: clTesto(x.fullName || x.name), telefono: clTesto(x.telephone_local).replace(/^\+39$/, ''), email: clTesto(x.email), sotto: [clTesto(x.code), clTesto(x.fiscalCode)].filter(Boolean).join(' · ') };
-          }), (r.dati.filtered || 0) > 20);
+          }), r.dati.filtered || 0);
         }, function () { errore(null); });
         return;
       }
@@ -4565,8 +4565,9 @@ window.__IP_MODIFICA=true;
         var trovati = (j._embedded && j._embedded.item) || [];
         fatto(trovati.map(function (x) {
           var tel = x.telephone && x.telephone.fullString ? x.telephone.fullString : (typeof x.telephone === 'string' ? x.telephone : '');
+          tel = tel.replace(/^\+39(?=\d)/, '+39 ');
           return { id: String(x.id), nome: pulisci((x.name || '') + ' ' + (x.surname || '')), telefono: tel, email: x.email || '', sotto: '' };
-        }), trovati.length >= 10);
+        }), Math.max(j.totalItems || 0, trovati.length));
       }, function () { errore(null); });
     }
     function disegnaClienti() {
@@ -4577,7 +4578,8 @@ window.__IP_MODIFICA=true;
       if (!clienti.cercato) return;
       if (!clienti.righe.length) zona.appendChild(el('div', 'ip-vuoto', 'Nessun cliente trovato con questi dati.'));
       else {
-        zona.appendChild(el('div', 'ip-etichetta', clienti.righe.length === 1 ? '1 cliente trovato' : clienti.righe.length + ' clienti trovati'));
+        var tot = Math.max(clienti.totale || 0, clienti.righe.length);
+        zona.appendChild(el('div', 'ip-etichetta', tot === 1 ? '1 cliente trovato' : interoItaliano(tot) + ' clienti trovati'));
         var lista = el('div', 'ip-scheda ip-lista');
         clienti.righe.forEach(function (x) {
           var riga = crea('button', 'ip-riga');
@@ -4592,7 +4594,7 @@ window.__IP_MODIFICA=true;
           lista.appendChild(riga);
         });
         zona.appendChild(lista);
-        if (clienti.limite) zona.appendChild(el('div', 'ip-nota-piccola', 'Mostro i primi ' + clienti.righe.length + ': aggiungi altri dati per restringere la ricerca.'));
+        if (tot > clienti.righe.length) zona.appendChild(el('div', 'ip-nota-piccola', 'Mostro i primi ' + clienti.righe.length + ': aggiungi il nome o altri dati per restringere la ricerca.'));
       }
       // Nuovo cliente: parte con i dati già scritti nella ricerca.
       var nuovo = crea('button', 'ip-secondario', IC.piu + '<span>Registra un nuovo cliente</span>');
