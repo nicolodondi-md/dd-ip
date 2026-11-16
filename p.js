@@ -4485,7 +4485,7 @@ window.__IP_MODIFICA=true;
     // sono il modulo "customer" del CRM, inviato con tutti i suoi campi e il suo gettone.
     // Eliminazione dei clienti: NON prevista (decisione di Nicolò).
     // Il CRM accetta anche e-mail sbagliate e con il cognome vuoto va in errore: i controlli li fa l'app prima di salvare.
-    var clienti = { cerca: '', righe: [], pagina: 0, filtrati: 0, inCarico: false, zona: null };
+    var clienti = { righe: [], inCarico: false, cercato: false, limite: false, zona: null };
     var CL_TIPI = [['individual', 'Privato'], ['company', 'Azienda'], ['public_administration', 'Pubblica amministrazione']];
     var CL_LISTE = {
       vendite: { uno: 'vendita', titolo: 'Vendite', tabella: 'sale_table', percorso: 'sale/list', vuoto: 'Nessuna vendita.' },
@@ -4499,80 +4499,106 @@ window.__IP_MODIFICA=true;
     function clEmailValida(e) { return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e); }
 
     // Elenco con la ricerca dell'app (campo di sistema su iPhone): una richiesta quando si smette di scrivere.
-    // Il campo di ricerca sta in cima alla pagina, sempre visibile. Senza ricerca non si mostra nessun cliente.
+    // Ricerca per campi (come nella scelta del cliente del carrello): cognome o ragione sociale, nome, telefono,
+    // e-mail, oppure codice fiscale o codice cliente. Parte SOLO con il tasto Cerca, mai da sola.
+    // Nome, cognome, telefono ed e-mail usano la ricerca clienti del CRM (/customers/search, al massimo 10 risultati);
+    // codice fiscale e codice cliente la ricerca dell'elenco clienti, che li trova.
+    var CL_CAMPI = [['cognome', 'Cognome o ragione sociale', 'text'], ['nome', 'Nome', 'text'], ['telefono', 'Telefono', 'tel'], ['email', 'E-mail', 'email'], ['codice', 'Codice fiscale o codice cliente', 'text']];
+    clienti.campi = {};
     function mostraClienti() {
-      var cerca = campoGrande('', 'search');
-      cerca.box.classList.add('ip-campo-testo', 'ip-cl-cerca');
-      cerca.input.type = 'search';
-      cerca.input.value = clienti.cerca;
-      cerca.input.setAttribute('placeholder', 'Cerca nome, telefono, e-mail, codice fiscale');
-      cerca.input.setAttribute('enterkeyhint', 'search');
-      cerca.input.setAttribute('autocapitalize', 'off');
-      cerca.input.setAttribute('autocorrect', 'off');
-      vista.appendChild(cerca.box);
-      var attesa = null;
-      var vai = function () {
-        clearTimeout(attesa);
-        var q = cerca.input.value.trim();
-        if (q === clienti.cerca && (clienti.righe.length || clienti.inCarico)) return;
-        clienti.cerca = q;
-        if (q.length < 2) { ++richiesta; clienti.righe = []; clienti.inCarico = false; disegnaClienti(); return; }
-        caricaClienti(true);
-      };
-      cerca.input.addEventListener('input', function () { clearTimeout(attesa); attesa = setTimeout(vai, 500); });
-      cerca.input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); vai(); cerca.input.blur(); chiudiTastiera(); } });
+      var g = el('div', 'ip-scheda ip-cl-modulo ip-cl-ricerca');
+      var input = {};
+      CL_CAMPI.forEach(function (d) {
+        var f = clCampo(d[1], clienti.campi[d[0]] || '', { tipo: d[2] === 'email' ? 'email' : d[2] === 'tel' ? 'tel' : 'text', modo: d[2] === 'tel' ? 'tel' : d[2] === 'email' ? 'email' : null, maiuscole: d[0] === 'email' ? false : d[0] === 'codice' ? true : null, largo: d[0] === 'codice' });
+        f.input.setAttribute('enterkeyhint', 'search');
+        f.input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); cercaClienti(); } });
+        input[d[0]] = f.input;
+        g.appendChild(f.box);
+      });
+      vista.appendChild(g);
+      function cercaClienti() {
+        var v = {};
+        CL_CAMPI.forEach(function (d) { v[d[0]] = input[d[0]].value.trim(); });
+        v.telefono = v.telefono.replace(/[^\d+]/g, '').replace(/^\+39/, '');
+        if (!v.cognome && !v.nome && !v.telefono && !v.email && !v.codice) { mostraAvviso('Scrivi qualcosa', 'Compila almeno un campo, poi tocca Cerca.'); return; }
+        chiudiTastiera();
+        for (var k in input) input[k].blur();
+        clienti.campi = v;
+        clienti.cercato = true;
+        caricaClienti();
+      }
       azioni.innerHTML = '';
-      azioni.appendChild(tastoAzione('ip-azione ip-azione-salva', IC.piu + '<b>Nuovo cliente</b>', function () { apriVoceAltro({ voce: 'clienti', nuovo: true, titolo: 'Nuovo cliente' }); }));
+      azioni.appendChild(tastoAzione('ip-azione ip-azione-salva', IC.cerca + '<b>Cerca</b>', cercaClienti));
       radice.classList.remove('ip-senza-azioni');
       clienti.zona = zonaContenuto();
-      if (clienti.cerca.length >= 2 && !clienti.righe.length) caricaClienti(true); else disegnaClienti();
-      if (!clienti.cerca) prontoAScrivere(cerca.input);
+      if (clienti.rifai && clienti.cercato) { clienti.rifai = false; caricaClienti(); } else disegnaClienti();
     }
-    function caricaClienti(daCapo) {
+    function caricaClienti() {
       var mia = ++richiesta;
-      if (daCapo) { clienti.righe = []; clienti.pagina = 0; }
+      var v = clienti.campi;
+      clienti.righe = [];
       clienti.inCarico = true;
       disegnaClienti();
-      chiediJson('/customer/list?dataTableView=customer_table&f%5Bsearch%5D=' + encodeURIComponent(clienti.cerca) + '&page=' + (clienti.pagina + 1) + '&perPage=50').then(function (r) {
+      var fatto = function (righe, limite) {
         if (mia !== richiesta) return;
         clienti.inCarico = false;
-        if (!r.dati || !r.dati.rows) { erroreDati(clienti.zona, r, 'clienti'); return; }
-        clienti.pagina++;
-        clienti.filtrati = r.dati.filtered || 0;
-        clienti.righe = clienti.righe.concat(r.dati.rows);
-        var dove = vista.scrollTop;
+        clienti.righe = righe;
+        clienti.limite = limite;
         disegnaClienti();
-        vista.scrollTop = dove;
-      }, function () { if (mia === richiesta) { clienti.inCarico = false; erroreDati(clienti.zona, null); } });
+      };
+      var errore = function (r) { if (mia === richiesta) { clienti.inCarico = false; erroreDati(clienti.zona, r || null, 'clienti'); } };
+      if (v.codice) {
+        chiediJson('/customer/list?dataTableView=customer_table&f%5Bsearch%5D=' + encodeURIComponent(v.codice) + '&page=1&perPage=20').then(function (r) {
+          if (!r.dati || !r.dati.rows) { errore(r); return; }
+          fatto(r.dati.rows.map(function (x) {
+            return { id: clIdDa(x.summaryUrl), nome: clTesto(x.fullName || x.name), telefono: clTesto(x.telephone_local).replace(/^\+39$/, ''), email: clTesto(x.email), sotto: [clTesto(x.code), clTesto(x.fiscalCode)].filter(Boolean).join(' · ') };
+          }), (r.dati.filtered || 0) > 20);
+        }, function () { errore(null); });
+        return;
+      }
+      var api = window.consoleBundle;
+      if (!api || !api.apiBaseUrl || !api.apiToken) { errore(null); return; }
+      fetch(new URL('/customers/search', api.apiBaseUrl), {
+        method: 'POST', headers: { 'X-Auth-Token': api.apiToken, 'Content-Type': 'application/json', 'Accept': 'application/hal+json' },
+        body: JSON.stringify({ name: v.nome || null, surname: v.cognome || null, email: v.email || null, telephone: v.telefono || null })
+      }).then(function (r) { return r.json(); }).then(function (j) {
+        var trovati = (j._embedded && j._embedded.item) || [];
+        fatto(trovati.map(function (x) {
+          var tel = x.telephone && x.telephone.fullString ? x.telephone.fullString : (typeof x.telephone === 'string' ? x.telephone : '');
+          return { id: String(x.id), nome: pulisci((x.name || '') + ' ' + (x.surname || '')), telefono: tel, email: x.email || '', sotto: '' };
+        }), trovati.length >= 10);
+      }, function () { errore(null); });
     }
     function disegnaClienti() {
       var zona = clienti.zona;
       if (!zona) return;
       zona.innerHTML = '';
-      if (clienti.inCarico && !clienti.righe.length) { caricamentoIn(zona); return; }
-      if (clienti.cerca.length < 2) { zona.appendChild(el('div', 'ip-vuoto', 'Scrivi almeno due lettere o cifre per cercare un cliente.')); return; }
-      if (!clienti.righe.length) { zona.appendChild(el('div', 'ip-vuoto', 'Nessun cliente trovato per "' + clienti.cerca + '".')); return; }
-      zona.appendChild(el('div', 'ip-etichetta', interoItaliano(clienti.filtrati) + (clienti.filtrati === 1 ? ' cliente trovato' : ' clienti trovati')));
-      var lista = el('div', 'ip-scheda ip-lista');
-      clienti.righe.forEach(function (x) {
-        var id = clIdDa(x.summaryUrl);
-        var riga = crea('button', 'ip-riga');
-        riga.type = 'button';
-        var t = el('span', 'ip-riga-testi');
-        var nome = clTesto(x.fullName || x.name) || 'Senza nome';
-        t.appendChild(el('span', 'ip-riga-nome', nome));
-        var tel = clTesto(x.telephone_local).replace(/^\+39$/, '');
-        t.appendChild(el('span', 'ip-riga-sotto', [tel, clTesto(x.email)].filter(Boolean).join(' · ') || 'Nessun recapito'));
-        var dove = [clTesto(x.address_city), clTesto(x.address_province)].filter(Boolean).join(' ');
-        t.appendChild(el('span', 'ip-riga-sotto ip-riga-codice', [clTesto(x.code), dove].filter(Boolean).join(' · ')));
-        riga.appendChild(t);
-        riga.appendChild(crea('span', 'ip-riga-freccia', ICONA_FRECCIA));
-        if (id) riga.addEventListener('click', function () { apriVoceAltro({ voce: 'clienti', cliente: id, titolo: nome }); });
-        lista.appendChild(riga);
-      });
-      zona.appendChild(lista);
-      var mancano = clienti.filtrati - clienti.righe.length;
-      if (mancano > 0) zona.appendChild(tastoAltre(mancano, clienti.inCarico, function () { if (!clienti.inCarico) caricaClienti(false); }, 50));
+      if (clienti.inCarico) { caricamentoIn(zona); return; }
+      if (!clienti.cercato) return;
+      if (!clienti.righe.length) zona.appendChild(el('div', 'ip-vuoto', 'Nessun cliente trovato con questi dati.'));
+      else {
+        zona.appendChild(el('div', 'ip-etichetta', clienti.righe.length === 1 ? '1 cliente trovato' : clienti.righe.length + ' clienti trovati'));
+        var lista = el('div', 'ip-scheda ip-lista');
+        clienti.righe.forEach(function (x) {
+          var riga = crea('button', 'ip-riga');
+          riga.type = 'button';
+          var t = el('span', 'ip-riga-testi');
+          t.appendChild(el('span', 'ip-riga-nome', x.nome || 'Senza nome'));
+          t.appendChild(el('span', 'ip-riga-sotto', [x.telefono, x.email].filter(Boolean).join(' · ') || 'Nessun recapito'));
+          if (x.sotto) t.appendChild(el('span', 'ip-riga-sotto ip-riga-codice', x.sotto));
+          riga.appendChild(t);
+          riga.appendChild(crea('span', 'ip-riga-freccia', ICONA_FRECCIA));
+          if (x.id) riga.addEventListener('click', function () { apriVoceAltro({ voce: 'clienti', cliente: x.id, titolo: x.nome || 'Cliente' }); });
+          lista.appendChild(riga);
+        });
+        zona.appendChild(lista);
+        if (clienti.limite) zona.appendChild(el('div', 'ip-nota-piccola', 'Mostro i primi ' + clienti.righe.length + ': aggiungi altri dati per restringere la ricerca.'));
+      }
+      // Nuovo cliente: parte con i dati già scritti nella ricerca.
+      var nuovo = crea('button', 'ip-secondario', IC.piu + '<span>Registra un nuovo cliente</span>');
+      nuovo.type = 'button';
+      nuovo.addEventListener('click', function () { apriVoceAltro({ voce: 'clienti', nuovo: true, titolo: 'Nuovo cliente', da: clienti.campi }); });
+      zona.appendChild(nuovo);
     }
 
     // Legge il modulo "customer" del CRM: valori, opzioni e gettone, più il nome mostrato in testa.
@@ -4819,6 +4845,15 @@ window.__IP_MODIFICA=true;
       var c = {};
       var gruppo = function (titolo) { zona.appendChild(el('div', 'ip-etichetta', titolo)); var g = el('div', 'ip-scheda ip-cl-modulo'); zona.appendChild(g); return g; };
       var metti = function (g, chiave, etichetta, opz) { var f = clCampo(etichetta, clValore(m, chiave), opz); c[chiave] = f.input; g.appendChild(f.box); return f; };
+      if (nuovo && s.da) {
+        // Dati scritti nella ricerca: diventano il punto di partenza del nuovo cliente.
+        var da = s.da;
+        if (da.cognome) m.v['customer[surname]'] = da.cognome;
+        if (da.nome) m.v['customer[name]'] = da.nome;
+        if (da.telefono) m.v['customer[telephone][local]'] = da.telefono;
+        if (da.email) m.v['customer[email]'] = da.email;
+        if (da.codice && /^[A-Z0-9]{16}$/i.test(da.codice)) m.v['customer[fiscalCode]'] = da.codice.toUpperCase();
+      }
       var tipo = clValore(m, 'customer[type]') || 'individual';
       var g1 = gruppo('Cliente');
       var seg = segmenti(CL_TIPI.map(function (t) { return { v: t[0], t: t[1] }; }), tipo, function (v) {
@@ -4909,7 +4944,7 @@ window.__IP_MODIFICA=true;
               return;
             }
             var nome = pulisci(nuovi['customer[name]'] + ' ' + nuovi['customer[surname]']);
-            clienti.righe = []; // l'elenco si ricarica con i dati nuovi
+            clienti.rifai = true; // tornando all'elenco la ricerca si rifà con i dati nuovi
             if (nuovo) {
               // Il nuovo cliente prende il posto del modulo: Indietro torna all'elenco.
               var st = { voce: 'clienti', cliente: id, titolo: nome };
