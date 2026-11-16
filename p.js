@@ -4571,9 +4571,26 @@ window.__IP_MODIFICA=true;
       var tel2 = f.querySelector('console-telephone-picker[local-name="customer[telephone2][local]"]');
       var v = {};
       campi.forEach(function (c) { v[c[0]] = c[1]; });
+      clLeggiProvince(f);
       if (tel && !v['customer[telephone][local]']) { v['customer[telephone][prefix]'] = tel.getAttribute('prefix') || ''; v['customer[telephone][local]'] = tel.getAttribute('local') || ''; }
       if (tel2 && !v['customer[telephone2][local]']) { v['customer[telephone2][prefix]'] = tel2.getAttribute('prefix') || ''; v['customer[telephone2][local]'] = tel2.getAttribute('local') || ''; }
       return { campi: campi, v: v };
+    }
+    // Provincia: per l'Italia il CRM usa una scelta (IT-FE, IT-BO...) e ignora il testo libero; i clienti vecchi hanno
+    // solo il testo (provinceRaw). Nell'app si scrive la sigla e si compilano tutti e due.
+    var clProvince = null;
+    function clLeggiProvince(f) {
+      if (clProvince) return;
+      var e = f.querySelector('console-select[name$="[province]"][options]');
+      try { clProvince = JSON.parse(e.getAttribute('options')).map(function (o) { return String(o.value); }); } catch (x) { /* resta vuoto */ }
+    }
+    function clSigla(v, base) { return (v[base + '[provinceRaw]'] || String(v[base + '[province]'] || '').replace(/^IT-/, '') || '').toUpperCase(); }
+    function clMettiProvincia(nuovi, v, base, sigla) {
+      sigla = String(sigla || '').trim().toUpperCase();
+      var codice = sigla && clProvince && clProvince.indexOf('IT-' + sigla) >= 0 ? 'IT-' + sigla : '';
+      nuovi[base + '[provinceRaw]'] = sigla;
+      nuovi[base + '[province]'] = codice;
+      if (codice && !v[base + '[country]']) nuovi[base + '[country]'] = 'IT';
     }
     function clValore(m, k) { return m && m.v[k] != null ? String(m.v[k]) : ''; }
     function clTelefono(m, n) {
@@ -4585,7 +4602,8 @@ window.__IP_MODIFICA=true;
     function clIndirizzo(m, base) {
       base = base || 'customer[address]';
       var via = [clValore(m, base + '[address]'), clValore(m, base + '[streetNumber]')].filter(Boolean).join(' ');
-      var luogo = [clValore(m, base + '[zipCode]'), clValore(m, base + '[city]'), clValore(m, base + '[provinceRaw]') ? '(' + clValore(m, base + '[provinceRaw]') + ')' : ''].filter(Boolean).join(' ');
+      var sigla = clSigla(m.v, base);
+      var luogo = [clValore(m, base + '[zipCode]'), clValore(m, base + '[city]'), sigla ? '(' + sigla + ')' : ''].filter(Boolean).join(' ');
       return [via, luogo].filter(Boolean).join(', ');
     }
     // Numeri della panoramica del CRM (vendite, preventivi...), letti dal testo della pagina riepilogo.
@@ -4670,7 +4688,9 @@ window.__IP_MODIFICA=true;
       Object.keys(CL_LISTE).forEach(function (k) {
         var b = crea('button', 'ip-riga');
         b.type = 'button';
-        b.appendChild(el('span', 'ip-riga-nome', CL_LISTE[k].titolo));
+        var tt = el('span', 'ip-riga-testi');
+        tt.appendChild(el('span', 'ip-riga-nome', CL_LISTE[k].titolo));
+        b.appendChild(tt);
         if (conta[k]) { var n = el('span', 'ip-ordine-importo'); n.appendChild(el('b', '', conta[k])); b.appendChild(n); }
         b.appendChild(crea('span', 'ip-riga-freccia', ICONA_FRECCIA));
         b.addEventListener('click', function () { apriVoceAltro({ voce: 'clienti', cliente: id, lista: k, titolo: CL_LISTE[k].titolo }); });
@@ -4807,7 +4827,9 @@ window.__IP_MODIFICA=true;
       metti(g3, 'customer[address][streetNumber]', 'Civico');
       metti(g3, 'customer[address][zipCode]', 'CAP', { modo: 'numeric' });
       metti(g3, 'customer[address][city]', 'Città');
-      metti(g3, 'customer[address][provinceRaw]', 'Provincia', { maiuscole: true, segnaposto: 'Es. FE' });
+      var prov = clCampo('Provincia', clSigla(m.v, 'customer[address]'), { maiuscole: true, segnaposto: 'Es. FE' });
+      prov.input.maxLength = 4;
+      g3.appendChild(prov.box);
       var g4 = gruppo('Dati fiscali');
       metti(g4, 'customer[fiscalCode]', 'Codice fiscale', { maiuscole: true });
       metti(g4, 'customer[vat]', 'Partita IVA', { modo: 'numeric' });
@@ -4841,7 +4863,7 @@ window.__IP_MODIFICA=true;
         var nuovi = {};
         Object.keys(c).forEach(function (k) { nuovi[k] = val(k); });
         nuovi['customer[email]'] = email; nuovi['customer[pec]'] = pec; nuovi['customer[fiscalCode]'] = cf;
-        nuovi['customer[address][provinceRaw]'] = val('customer[address][provinceRaw]').toUpperCase();
+        clMettiProvincia(nuovi, m.v, 'customer[address]', prov.input.value);
         nuovi['customer[type]'] = tipo;
         nuovi['customer[telephone][prefix]'] = pre.input.value.replace(/\D+/g, '') || '39';
         nuovi['customer[telephone][local]'] = tel;
@@ -4918,9 +4940,13 @@ window.__IP_MODIFICA=true;
         zona.appendChild(el('div', 'ip-etichetta', 'Indirizzo di consegna'));
         var g = el('div', 'ip-scheda ip-cl-modulo');
         var c = {};
-        [['[address]', 'Via', { largo: true, obbligatorio: true }], ['[streetNumber]', 'Civico'], ['[zipCode]', 'CAP', { modo: 'numeric', obbligatorio: true }], ['[city]', 'Città', { obbligatorio: true }], ['[provinceRaw]', 'Provincia', { maiuscole: true, segnaposto: 'Es. FE' }]].forEach(function (d) {
+        clLeggiProvince(f);
+        [['[address]', 'Via', { largo: true, obbligatorio: true }], ['[streetNumber]', 'Civico'], ['[zipCode]', 'CAP', { modo: 'numeric', obbligatorio: true }], ['[city]', 'Città', { obbligatorio: true }]].forEach(function (d) {
           var fc = clCampo(d[1], v[b + d[0]] || '', d[2]); c[b + d[0]] = fc.input; g.appendChild(fc.box);
         });
+        var provC = clCampo('Provincia', clSigla(v, b), { maiuscole: true, segnaposto: 'Es. FE' });
+        provC.input.maxLength = 4;
+        g.appendChild(provC.box);
         zona.appendChild(g);
         impagina(zona);
         var salvando = false;
@@ -4930,9 +4956,11 @@ window.__IP_MODIFICA=true;
           chiudiTastiera();
           var nuovi = {};
           Object.keys(c).forEach(function (k) { nuovi[k] = c[k].value.trim(); });
-          nuovi[b + '[provinceRaw]'] = nuovi[b + '[provinceRaw]'].toUpperCase();
+          clMettiProvincia(nuovi, v, b, provC.input.value);
           if (!nuovi[b + '[address]'] || !nuovi[b + '[city]'] || !nuovi[b + '[zipCode]']) { mostraAvviso('Mancano dei dati', 'Servono via, CAP e città.'); return; }
-          var coppie = campi.map(function (p) { return [p[0], Object.prototype.hasOwnProperty.call(nuovi, p[0]) ? nuovi[p[0]] : p[1]]; });
+          var visti = {};
+          var coppie = campi.map(function (p) { visti[p[0]] = true; return [p[0], Object.prototype.hasOwnProperty.call(nuovi, p[0]) ? nuovi[p[0]] : p[1]]; });
+          Object.keys(nuovi).forEach(function (k) { if (!visti[k]) coppie.push([k, nuovi[k]]); });
           salvando = true;
           chiedi(indirizzo, codifica(coppie)).then(function (esito) {
             salvando = false;
