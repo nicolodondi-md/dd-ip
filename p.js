@@ -1010,10 +1010,11 @@ window.__IP_MODIFICA=true;
     function disegnaAzioni(p) {
       azioni.innerHTML = '';
       if (conCamera) azioni.appendChild(tastoAzione('ip-azione ip-azione-scan', IC.camera + '<b>Scansiona</b>', apriCamera));
-      if (p && p.puoPrezzo) azioni.appendChild(tastoAzione('ip-azione', '<small>Modifica</small><b>Prezzo</b>', function () {
+      // Android (grafica in vetro): in basso solo Scansiona; Modifica prezzo e quantità stanno nell'elenco Azioni della scheda.
+      if (p && p.puoPrezzo && !VETRO) azioni.appendChild(tastoAzione('ip-azione', '<small>Modifica</small><b>Prezzo</b>', function () {
         if (MODIFICA_IN_APP) apriModifica(p, 'prezzo'); else location.href = '/product/edit/' + p.id + '/price';
       }));
-      if (p && p.puoQuantita) azioni.appendChild(tastoAzione('ip-azione', '<small>Modifica</small><b>Quantità</b>', function () {
+      if (p && p.puoQuantita && !VETRO) azioni.appendChild(tastoAzione('ip-azione', '<small>Modifica</small><b>Quantità</b>', function () {
         if (MODIFICA_IN_APP) apriModifica(p, 'quantita'); else location.href = '/product/edit/' + p.id + '/quantity';
       }));
       radice.classList.toggle('ip-senza-azioni', !azioni.children.length);
@@ -1187,7 +1188,7 @@ window.__IP_MODIFICA=true;
       p.statistiche.forEach(function (s) { if (s.nome) dati.appendChild(rigaDato(s.nome, s.valore)); });
       vista.appendChild(dati);
 
-      if (cfg.guscio === 'ios') {
+      if (cfg.guscio === 'ios' || VETRO) {
         // Su iPhone i tasti della barra di sistema possono ridursi alla sola icona (per esempio su iPhone Duo):
         // le stesse azioni sono ripetute qui, scritte per esteso, in fondo alla scheda.
         var voci = [];
