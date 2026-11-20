@@ -6959,7 +6959,9 @@ window.__IP_MODIFICA=true;
           var a = f.getAttribute('action') || '';
           if (!modulo && !/\/(delete|duplicate)$/.test(a) && f.getAttribute('name') && f.getAttribute('name') !== 'f') modulo = f;
         });
-        if (!modulo) contenuto.appendChild(el('div', 'ip-vuoto', 'Non riesco ad aprire questa pagina. Riprova.'));
+        var tabella = doc.querySelector('console-table[config]');
+        if (!modulo && tabella) prTabella(contenuto, tabella, r.percorso);
+        else if (!modulo) contenuto.appendChild(el('div', 'ip-vuoto', 'Non riesco ad aprire questa pagina. Riprova.'));
         else disegnaModuloCrm(contenuto, modulo, {
           indirizzo: r.percorso, nuovo: !!s.nuova,
           riuscito: function (esito) {
@@ -7013,6 +7015,37 @@ window.__IP_MODIFICA=true;
       }
     }
     var listaDaRifare = false;
+    // Tabella del CRM in sola lettura (per esempio le istanze delle promozioni generative): colonne e titoli
+    // presi dalla configurazione della tabella, righe dalla sua richiesta JSON.
+    function prTabella(zona, tabella, percorso) {
+      var mia = richiesta;
+      var conf = prJson(tabella.getAttribute('config'), {});
+      var colonne = (conf.columns || []).filter(function (c) { return c.visible !== false && c.key && !c.action; });
+      caricamentoIn(zona);
+      chiediJson(percorso + '?dataTableView=' + encodeURIComponent(conf.name) + '&page=1&perPage=300').then(function (r) {
+        if (mia !== richiesta) return;
+        zona.innerHTML = '';
+        if (!r.dati || !r.dati.rows) { erroreDati(zona, r, null); return; }
+        if (!r.dati.rows.length) { zona.appendChild(el('div', 'ip-vuoto', 'Ancora niente qui.')); return; }
+        var testo = function (v) { return v == null ? '' : typeof v === 'object' ? pulisci(v.value || v.name || v.text || '') : pulisci(String(v)); };
+        var lista = el('div', 'ip-scheda ip-lista');
+        r.dati.rows.forEach(function (x) {
+          var riga = crea('div', 'ip-riga ip-riga-altro');
+          var t = el('span', 'ip-riga-testi');
+          colonne.forEach(function (c, i) {
+            var v = testo(x[c.key]);
+            if (!v) return;
+            if (i === 0) t.appendChild(el('span', 'ip-riga-nome', v));
+            else t.appendChild(el('span', 'ip-riga-sotto', pulisci(c.title || c.key) + ': ' + v));
+          });
+          riga.appendChild(t);
+          var vendita = /\/retail\/order\/(\d+)/.exec(JSON.stringify(x));
+          if (vendita) { riga = riga.cloneNode(true); riga.style.cursor = 'pointer'; riga.addEventListener('click', function () { apriVenditaDaAltro(vendita[1]); }); }
+          lista.appendChild(riga);
+        });
+        zona.appendChild(lista);
+      }, function () { if (mia === richiesta) erroreDati(zona, null); });
+    }
     function prRigaAzione(titoloRiga, sotto, icona, rossa, fai) {
       var riga = crea('button', 'ip-riga ip-riga-altro' + (rossa ? ' ip-pr-rossa' : ''));
       riga.type = 'button';
