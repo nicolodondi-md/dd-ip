@@ -6882,6 +6882,15 @@ window.__IP_MODIFICA=true;
       return Array.prototype.filter.call(nodo.querySelectorAll('input[type="hidden"]'), function (i) { return i.getAttribute('name') === nome; });
     }
     function prEtichetta(t) { return pulisci(t).replace(/\s*\*$/, ''); }
+    // Errori del CRM: quelli soliti più i riquadri con l'icona rossa che il CRM mette sopra i campi sbagliati.
+    function prErrori(doc) {
+      var lista = leggiErrori(doc);
+      Array.prototype.forEach.call(doc.querySelectorAll('[class*="text-(--danger)"]'), function (sp) {
+        var t = sp.parentElement ? pulisci(sp.parentElement.textContent) : '';
+        if (t.length > 2 && lista.indexOf(t) < 0) lista.push(t);
+      });
+      return lista;
+    }
 
     function mostraSchedaPromo(s) {
       var mia = richiesta;
@@ -7043,6 +7052,7 @@ window.__IP_MODIFICA=true;
     // modulo: il <form> del CRM (documento scaricato, non mostrato). Ogni campo dell'app scrive lì dentro.
     function disegnaModuloCrm(zona, modulo, opz) {
       var file = {};          // nome del campo -> File scelto dall'utente
+      var obbligatori = [];   // campi richiesti dal CRM: si controllano prima di inviare
       var condizioni = [];    // blocchi che compaiono solo con un certo valore di un altro campo
       var scorrimento = 0;
       function valoreDi(nome) {
@@ -7058,11 +7068,12 @@ window.__IP_MODIFICA=true;
         scorrimento = vista.scrollTop;
         zona.innerHTML = '';
         condizioni = [];
+        obbligatori = [];
         costruisci();
         vista.scrollTop = scorrimento;
       }
       function costruisci() {
-        var errori = leggiErrori(modulo.ownerDocument);
+        var errori = prErrori(modulo.ownerDocument);
         if (errori.length) {
           var box = el('div', 'ip-scheda ip-pr-errori');
           errori.slice(0, 6).forEach(function (t) { box.appendChild(el('div', '', t)); });
@@ -7130,14 +7141,16 @@ window.__IP_MODIFICA=true;
           cammina(n, stato, gruppo, prendiEtichetta);
         });
       }
-      function riga(g, etichetta, largo) {
+      function riga(g, etichetta, largo, n, vuoto) {
         var box = el('div', 'ip-cl-campo' + (largo ? ' ip-cl-largo' : ''));
-        if (etichetta) box.appendChild(el('span', 'ip-cl-nome', etichetta));
+        var richiesto = n && n.hasAttribute('required');
+        if (etichetta) box.appendChild(el('span', 'ip-cl-nome', etichetta + (richiesto ? ' *' : '')));
+        if (richiesto && vuoto) obbligatori.push({ nome: etichetta || 'un campo', box: box, vuoto: vuoto });
         g.appendChild(box);
         return box;
       }
       function campoTesto(g, n, etichetta, area) {
-        var box = riga(g, etichetta, area);
+        var box = riga(g, etichetta, area, n, function () { return !pulisci(area ? n.value || n.textContent : n.value || n.getAttribute('value')); });
         var i = document.createElement(area ? 'textarea' : 'input');
         if (!area) i.type = 'text';
         i.className = 'ip-cl-input' + (area ? ' ip-pr-area' : '');
@@ -7200,7 +7213,7 @@ window.__IP_MODIFICA=true;
       function campoScelta(g, n, etichetta) {
         var multipla = n.hasAttribute('multiple');
         var voci = vociScelta(n);
-        var box = riga(g, etichetta, multipla);
+        var box = riga(g, etichetta, multipla, n, function () { return !sceltiDi(n).length; });
         tastoValore(box, testoScelti(voci, sceltiDi(n), multipla), function () {
           foglioScelta(etichetta || 'Scegli', voci, sceltiDi(n), multipla, function (scelti) {
             if (!multipla && !scelti.length) return;
@@ -7224,7 +7237,7 @@ window.__IP_MODIFICA=true;
         });
       }
       function campoRicerca(g, n, etichetta) {
-        var box = riga(g, etichetta, true);
+        var box = riga(g, etichetta, true, n, function () { return !sceltiDi(n).length; });
         var voci = prJson(n.getAttribute('initial-items'), []);
         var scelto = sceltiDi(n)[0] || '';
         var nomeScelto = (voci.filter(function (x) { return String(x.id) === scelto; })[0] || {}).text || (scelto ? 'Scelto' : 'Cerca e scegli');
@@ -7247,13 +7260,14 @@ window.__IP_MODIFICA=true;
         tastoValore(box, elenco.length ? (elenco.length === 1 ? '1 prodotto' : elenco.length + ' prodotti') : 'Scegli i prodotti', function () {
           foglioRicerca(etichetta || 'Prodotti', function (q) { return prCerca(n.getAttribute('data-autocompleter-token'), n.getAttribute('data-autocompleter-options'), q); }, attuali(), true, function (sel) {
             Array.prototype.forEach.call(n.querySelectorAll('[data-product-selection-item]'), function (x) { x.parentNode.removeChild(x); });
+            var rif = n.firstChild;
             sel.forEach(function (p) {
               var sp = n.ownerDocument.createElement('span');
               sp.setAttribute('data-product-selection-item', ''); sp.setAttribute('data-value', p.id); sp.setAttribute('data-label', p.text);
               var h = n.ownerDocument.createElement('input');
               h.type = 'hidden'; h.setAttribute('name', nome); h.setAttribute('value', p.id); h.value = p.id;
               sp.appendChild(h);
-              n.insertBefore(sp, n.firstChild);
+              n.insertBefore(sp, rif);
             });
             ridisegna();
           });
@@ -7268,7 +7282,7 @@ window.__IP_MODIFICA=true;
       function campoData(g, n, etichetta) {
         var nome = n.getAttribute('name');
         var h = prNascosti(n.parentNode, nome)[0];
-        var box = riga(g, etichetta, false);
+        var box = riga(g, etichetta, false, n, function () { return !(h && h.value); });
         var fila = el('div', 'ip-pr-fila');
         box.appendChild(fila);
         var i = document.createElement('input');
@@ -7283,7 +7297,8 @@ window.__IP_MODIFICA=true;
         var nome = n.getAttribute('name');
         var h = prNascosti(n.parentNode, nome)[0];
         var secondi = /00:00:00/.test(n.getAttribute('mask') || '');
-        var dove = fila || riga(g, etichetta, false);
+        var dove = fila || riga(g, etichetta, false, n, function () { return !(h && h.value); });
+        if (fila && n.hasAttribute('required')) obbligatori.push({ nome: 'l’ora', box: fila, vuoto: function () { return !(h && h.value); } });
         var i = document.createElement('input');
         i.type = 'time';
         i.className = 'ip-cl-input ip-pr-ora';
@@ -7384,6 +7399,12 @@ window.__IP_MODIFICA=true;
       function salva() {
         if (salvando) return;
         chiudiTastiera();
+        var mancano = obbligatori.filter(function (o) { return !o.box.closest('[hidden]') && o.vuoto(); }).map(function (o) { return o.nome; });
+        if (mancano.length) {
+          mostraAvviso('Mancano dei dati', 'Compila: ' + mancano.filter(function (x, i, t) { return t.indexOf(x) === i; }).join(', ') + '.');
+          avvisa('errore');
+          return;
+        }
         var dati = new FormData();
         Array.prototype.forEach.call(modulo.querySelectorAll('input, textarea, select'), function (x) {
           var nome = x.getAttribute('name');
@@ -7402,9 +7423,9 @@ window.__IP_MODIFICA=true;
         }).then(function (esito) {
           salvando = false;
           if (/\/login$/.test(esito.percorso)) { location.reload(); return; }
-          var ok = /successAlert\(/.test(esito.html) && !leggiErrori(esito.doc).length;
+          var errori = prErrori(esito.doc);
+          var ok = /successAlert\(/.test(esito.html) && !errori.length;
           if (ok) { listaDaRifare = true; opz.riuscito(esito); return; }
-          var errori = leggiErrori(esito.doc);
           mostraAvviso(opz.nuovo ? 'Non creato' : 'Non salvato', errori[0] || 'Il CRM non ha accettato i dati: controllali e riprova.');
           avvisa('errore');
           // Il CRM rimanda il modulo con i messaggi accanto ai campi: lo si ridisegna da lì.
