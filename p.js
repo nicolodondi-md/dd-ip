@@ -6905,7 +6905,7 @@ window.__IP_MODIFICA=true;
       var nome = s.titolo || '';
       // Testata: nome e stato, come nel CRM.
       if (!s.nuova) {
-        var titoloLink = base && corpoPag.querySelector('a[href="' + base + '"]');
+        var titoloLink = base && (corpoPag.querySelector('a[href="' + base + '"]') || doc.querySelector('a[href="' + base + '"]'));
         if (titoloLink && pulisci(titoloLink.textContent)) nome = pulisci(titoloLink.textContent);
         var testa = el('div', 'ip-scheda ip-pr-testa');
         testa.appendChild(el('div', 'ip-pr-nome', nome));
@@ -6923,7 +6923,7 @@ window.__IP_MODIFICA=true;
         zona.appendChild(testa);
         // Schede del CRM (Dettagli, Regole di attivazione, Vendite...) come segmenti.
         var schede = [];
-        Array.prototype.forEach.call(corpoPag.querySelectorAll('a[href^="' + base + '/"]'), function (a) {
+        Array.prototype.forEach.call(doc.querySelectorAll('a[href^="' + base + '/"]'), function (a) {
           var h = a.getAttribute('href');
           if (/\/(delete|duplicate)$/.test(h) || schede.some(function (x) { return x.v === h; })) return;
           var t = pulisci(a.textContent).replace(/^Regole di attivazione$/i, 'Regole');
