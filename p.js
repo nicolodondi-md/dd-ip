@@ -884,7 +884,22 @@ window.__IP_MODIFICA=true;
       var fuori = !!coppia && coppia.getBoundingClientRect().bottom < limite + 4;
       if (fuori) {
         mini.innerHTML = '';
-        var tessere = coppia.querySelectorAll('.ip-numero');
+        // Dentro una vendita i totali sono già in cima: la striscia dice quale vendita è (data, ora e numero).
+        if (vistaCarrelli === 'ordine') {
+          var dati = {};
+          Array.prototype.forEach.call(vista.querySelectorAll('.ip-dato'), function (r) {
+            var n = r.querySelector('.ip-dato-nome'), v = r.querySelector('.ip-dato-valore');
+            if (n && v && !(pulisci(n.textContent) in dati)) dati[pulisci(n.textContent)] = pulisci(v.textContent);
+          });
+          [['Data', dati['Data']], ['N.', dati['Numero']]].forEach(function (x) {
+            if (!x[1]) return;
+            var pezzo = el('span', 'ip-mini-voce');
+            pezzo.appendChild(el('small', '', x[0]));
+            pezzo.appendChild(el('b', '', x[1]));
+            mini.appendChild(pezzo);
+          });
+        }
+        var tessere = vistaCarrelli === 'ordine' && mini.children.length ? [] : coppia.querySelectorAll('.ip-numero');
         for (var i = 0; i < tessere.length; i++) {
           var nome = tessere[i].querySelector('.ip-numero-nome'), valore = tessere[i].querySelector('.ip-numero-valore');
           if (!nome || !valore) continue;
