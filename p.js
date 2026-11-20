@@ -5807,11 +5807,21 @@ window.__IP_MODIFICA=true;
     }
     // Esiti ricordati per tutta la sessione dell'app: non si richiedono a ogni ricarica della pagina.
     try { var permessiSalvati = JSON.parse(sessionStorage.getItem('ip-permessi') || 'null'); if (permessiSalvati) { permessi.sezioni = permessiSalvati.sezioni || {}; permessi.voci = permessiSalvati.voci || {}; permessi.vociControllate = !!permessiSalvati.vociControllate; permessi.admin = permessiSalvati.admin; if (permessi.admin === undefined) permessi.vociControllate = false; } } catch (e) { /* si ricontrolla */ }
+    // Amministratore ricordato tra un'apertura e l'altra (stesso utente): le promozioni compaiono subito,
+    // il controllo vero si rifà dietro aprendo Altro e le toglie se il ruolo è cambiato.
+    function emailUtente() { var u = utente || leggiUtente(document); return u && u.email ? u.email.toLowerCase() : ''; }
+    if (permessi.admin === undefined && NATIVO) {
+      try {
+        var ricordo = JSON.parse(localStorage.getItem('ip-admin-ricordato') || 'null');
+        if (ricordo && ricordo.email && ricordo.email === emailUtente()) permessi.admin = ricordo.admin === true;
+      } catch (e) { /* si aspetta il controllo */ }
+    }
     function salvaPermessi() {
       try {
         sessionStorage.setItem('ip-permessi', JSON.stringify({ sezioni: permessi.sezioni, voci: permessi.voci, vociControllate: permessi.vociControllate, admin: permessi.admin }));
         // Le pagine del CRM aperte dall'app (promozioni) lo leggono per sapere se possono restare aperte.
         sessionStorage.setItem('ip-admin', permessi.admin === true ? '1' : '0');
+        if (permessi.vociControllate && (permessi.admin === true || permessi.admin === false) && emailUtente()) localStorage.setItem('ip-admin-ricordato', JSON.stringify({ email: emailUtente(), admin: permessi.admin }));
       } catch (e) { /* non indispensabile */ }
     }
     // Amministratore: il ruolo dell'utente nell'elenco utenti del CRM. Chi non può aprire quell'elenco non lo è.
@@ -5847,13 +5857,16 @@ window.__IP_MODIFICA=true;
       var voci = Object.keys(VOCE_ALTRO).filter(function (id) { return !!VOCE_ALTRO[id].prova; });
       // Più voci possono avere lo stesso controllo (le analisi della cassa): si fa una richiesta sola per indirizzo.
       var indirizzi = voci.map(function (id) { return VOCE_ALTRO[id].prova; }).filter(function (u, i, tutti) { return tutti.indexOf(u) === i; });
-      return inFila(indirizzi.map(function (u) { return function () { return prova(u); }; }), 2).then(function (esiti) {
-        voci.forEach(function (id) { var e = esiti[indirizzi.indexOf(VOCE_ALTRO[id].prova)]; if (e !== null && e !== undefined) permessi.voci[id] = e; });
-        return controllaAdmin();
-      }).then(function (admin) {
+      // Prima il ruolo (una richiesta): le promozioni compaiono subito, poi gli altri controlli due alla volta.
+      var esitoAdmin = null;
+      return controllaAdmin().then(function (admin) {
+        esitoAdmin = admin;
         // Senza risposta certa (rete, utente non ancora letto) non si decide: Altro ricontrolla la volta dopo.
-        if (admin === true || admin === false) permessi.admin = admin;
-        permessi.vociControllate = admin !== null;
+        if (admin === true || admin === false) { permessi.admin = admin; applicaPermessi(); }
+        return inFila(indirizzi.map(function (u) { return function () { return prova(u); }; }), 2);
+      }).then(function (esiti) {
+        voci.forEach(function (id) { var e = esiti[indirizzi.indexOf(VOCE_ALTRO[id].prova)]; if (e !== null && e !== undefined) permessi.voci[id] = e; });
+        permessi.vociControllate = esitoAdmin !== null;
         salvaPermessi();
       });
     }
