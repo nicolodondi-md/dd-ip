@@ -3499,10 +3499,10 @@ window.__IP_MODIFICA=true;
     // Vendite: la dashboard del CRM (/retail/order/dashboard) ridisegnata per l'app.
     // I numeri arrivano dalla pagina del sito, letta in sottofondo con gli stessi filtri.
     // ====================================================================================
-    var vendite = { periodo: 'oggi', da: '', a: '', sedi: [], stampante: '', iva: 'excluded', pagamenti: 0, dati: null, filtri: null, confronto: 'anno-sett', datiConfronto: null, orario: true };
+    var vendite = { periodo: 'oggi', da: '', a: '', sedi: [], stampante: '', iva: 'excluded', pagamenti: 0, dati: null, filtri: null, confronto: 'anno-sett', datiConfronto: null, orario: false };
     try {
       var ricordate = JSON.parse(localStorage.getItem('ip-vendite') || 'null');
-      if (ricordate) { vendite.sedi = ricordate.sedi || []; vendite.stampante = ricordate.stampante || ''; vendite.iva = ricordate.iva || 'excluded'; if (ricordate.confronto) vendite.confronto = ricordate.confronto; if (ricordate.orario === false) vendite.orario = false; }
+      if (ricordate) { vendite.sedi = ricordate.sedi || []; vendite.stampante = ricordate.stampante || ''; vendite.iva = ricordate.iva || 'excluded'; if (ricordate.confronto) vendite.confronto = ricordate.confronto; if (ricordate.orarioScelto === true) vendite.orario = true; }
     } catch (e) { /* si parte dai filtri predefiniti */ }
 
     function giorno(d) { return ('0' + d.getDate()).slice(-2) + '/' + ('0' + (d.getMonth() + 1)).slice(-2) + '/' + d.getFullYear(); }
@@ -4077,7 +4077,7 @@ window.__IP_MODIFICA=true;
 
     function caricaVendite() {
       var mia = ++richiesta;
-      try { localStorage.setItem('ip-vendite', JSON.stringify({ sedi: vendite.sedi, stampante: vendite.stampante, iva: vendite.iva, confronto: vendite.confronto, orario: vendite.orario })); } catch (e) { /* non indispensabile */ }
+      try { localStorage.setItem('ip-vendite', JSON.stringify({ sedi: vendite.sedi, stampante: vendite.stampante, iva: vendite.iva, confronto: vendite.confronto, orarioScelto: vendite.orario })); } catch (e) { /* non indispensabile */ }
       vendite.dati = null;
       vendite.datiConfronto = null;
       vendite.orarioConfronto = null;
@@ -4202,7 +4202,7 @@ window.__IP_MODIFICA=true;
     function nomeCassa(stampante) { return pulisci(String(stampante || '').replace(/^EPSON\s+/i, '')); }
     function chip(testo, classe) { return el('span', 'ip-chip-stato' + (classe ? ' ' + classe : ''), testo); }
     function salvaFiltriVendite() {
-      try { localStorage.setItem('ip-vendite', JSON.stringify({ sedi: vendite.sedi, stampante: vendite.stampante, iva: vendite.iva, confronto: vendite.confronto, orario: vendite.orario })); } catch (e) { /* non indispensabile */ }
+      try { localStorage.setItem('ip-vendite', JSON.stringify({ sedi: vendite.sedi, stampante: vendite.stampante, iva: vendite.iva, confronto: vendite.confronto, orarioScelto: vendite.orario })); } catch (e) { /* non indispensabile */ }
     }
 
     function leggiOrdine(x) {
