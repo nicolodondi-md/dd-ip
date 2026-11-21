@@ -644,7 +644,7 @@ window.__IP_MODIFICA=true;
           voci: vociPermesse(),
           filtra: cercaInAltro() || null,
           ordini: vistaCarrelli === 'ordini' ? { periodo: vendite.periodo, tipo: ordini.tipo || '', sedi: vendite.sedi.length, cassa: !!ordini.cassa } : null,
-          vendite: vistaCarrelli === 'vendite' ? { periodo: vendite.periodo, iva: vendite.iva, sedi: vendite.sedi.length, cassa: !!vendite.stampante, confronto: confrontoValido(), confronti: confrontiPossibili() } : null
+          vendite: vistaCarrelli === 'vendite' ? { periodo: vendite.periodo, iva: vendite.iva, sedi: vendite.sedi.length, cassa: !!vendite.stampante, confronto: confrontoValido(), confronti: confrontiPossibili(), orario: orarioPossibile() ? vendite.orario : null } : null
         });
         raccontaSelettori();
         if (racconto === ultimoRacconto) return;
@@ -688,6 +688,7 @@ window.__IP_MODIFICA=true;
           if (valore.periodo) { vendite.periodo = valore.periodo; caricaVendite(); }
           else if (valore.iva) { vendite.iva = valore.iva; caricaVendite(); }
           else if (valore.confronto) { vendite.confronto = valore.confronto; caricaVendite(); }
+          else if (typeof valore.orario === 'boolean') { vendite.orario = valore.orario; caricaVendite(); }
           else if (valore.apri === 'date') foglioDate();
           else if (valore.apri === 'sedi') scegliSedi();
           else if (valore.apri === 'cassa') scegliCassa();
@@ -3498,10 +3499,10 @@ window.__IP_MODIFICA=true;
     // Vendite: la dashboard del CRM (/retail/order/dashboard) ridisegnata per l'app.
     // I numeri arrivano dalla pagina del sito, letta in sottofondo con gli stessi filtri.
     // ====================================================================================
-    var vendite = { periodo: 'oggi', da: '', a: '', sedi: [], stampante: '', iva: 'excluded', pagamenti: 0, dati: null, filtri: null, confronto: 'anno-sett', datiConfronto: null };
+    var vendite = { periodo: 'oggi', da: '', a: '', sedi: [], stampante: '', iva: 'excluded', pagamenti: 0, dati: null, filtri: null, confronto: 'anno-sett', datiConfronto: null, orario: true };
     try {
       var ricordate = JSON.parse(localStorage.getItem('ip-vendite') || 'null');
-      if (ricordate) { vendite.sedi = ricordate.sedi || []; vendite.stampante = ricordate.stampante || ''; vendite.iva = ricordate.iva || 'excluded'; if (ricordate.confronto) vendite.confronto = ricordate.confronto; }
+      if (ricordate) { vendite.sedi = ricordate.sedi || []; vendite.stampante = ricordate.stampante || ''; vendite.iva = ricordate.iva || 'excluded'; if (ricordate.confronto) vendite.confronto = ricordate.confronto; if (ricordate.orario === false) vendite.orario = false; }
     } catch (e) { /* si parte dai filtri predefiniti */ }
 
     function giorno(d) { return ('0' + d.getDate()).slice(-2) + '/' + ('0' + (d.getMonth() + 1)).slice(-2) + '/' + d.getFullYear(); }
@@ -3549,6 +3550,88 @@ window.__IP_MODIFICA=true;
       if (vendite.periodo === 'mese') return [spostaMesi(da, -1), spostaMesi(a, -1)];
       var passo = Math.ceil(giorni / 7) * 7;
       return [spostaGiorni(da, -passo), spostaGiorni(a, -passo)];
+    }
+    // ---------- Confronto a parità di orario ----------
+    // Vale solo guardando oggi (un giorno solo): il giorno di confronto è finito, oggi no. Per il giorno di
+    // confronto si scaricano gli elenchi del CRM (vendite, prodotti venduti, resi) con gli stessi filtri e si
+    // contano solo le righe fatte entro l'ora e il minuto di adesso. Su un giorno intero questi conti danno
+    // esattamente le caselle della dashboard (provato su staging l'8/10/2026: 49 vendite, 320 pezzi,
+    // 1.665,45 € IE, 2.031,87 € IC, scontrino medio 33,99 / 41,47 €).
+    function orarioPossibile() {
+      var e = intervallo().split(' - ');
+      return e[0] === e[1] && e[0] === giorno(new Date()) && confrontoValido() !== 'no';
+    }
+    function confrontoOrario() { return vendite.orario && orarioPossibile() && vendite.orarioConfronto ? vendite.orarioConfronto : null; }
+    function tuttiIRighe(base, perPagina) {
+      var righe = [];
+      function pagina(n) {
+        return chiediJson(base + '&page=' + n + '&perPage=' + perPagina).then(function (r) {
+          if (!r.dati || !r.dati.rows) throw new Error('dati');
+          righe = righe.concat(r.dati.rows);
+          var totale = +r.dati.filtered || 0;
+          return righe.length < totale && r.dati.rows.length === perPagina && n < 40 ? pagina(n + 1) : righe;
+        });
+      }
+      return pagina(1);
+    }
+    function minutiCrm(testo) { var m = /(\d{1,2}):(\d{2})/.exec(String(testo || '')); return m ? +m[1] * 60 + +m[2] : null; }
+    function soldiTessera(v) { var t = (Math.round(v * 100) / 100).toFixed(2).split('.'); return t[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.') + ',' + t[1] + ' €'; }
+    function calcolaOrario(giornoConfronto, datiInteri) {
+      var adesso = new Date();
+      var limite = adesso.getHours() * 60 + adesso.getMinutes();
+      var g = giorno(giornoConfronto), range = encodeURIComponent(g + ' - ' + g);
+      var sedi = vendite.sedi.map(function (x) { return '&f%5Bheadquarter%5D%5B%5D=' + encodeURIComponent(x); }).join('');
+      var stampante = '';
+      if (vendite.stampante && vendite.filtri) {
+        var o = (vendite.filtri.stampanti || []).filter(function (x) { return String(x.v) === String(vendite.stampante); })[0];
+        stampante = o ? pulisci(o.t) : '';
+        if (!stampante) return Promise.reject(new Error('cassa'));
+      }
+      return tuttiIRighe('/retail/order?dataTableView=order_table&f%5Brange%5D=' + range + sedi, 500).then(function (ordiniGiorno) {
+        if (stampante) ordiniGiorno = ordiniGiorno.filter(function (x) { return pulisci(x.printer_name || '') === stampante; });
+        var tutti = {}, entro = {};
+        var conti = { vendite: 0, venduto: 0, scontrini: 0, fatture: 0 };
+        ordiniGiorno.forEach(function (x) {
+          tutti[x.id] = true;
+          var mm = minutiCrm(x.createdAt);
+          if (mm == null || mm > limite) return;
+          entro[x.id] = true;
+          var importo = vendite.iva === 'included' ? +x.discountedAmount || 0 : +x.noVatAmount || 0;
+          conti.vendite++;
+          conti.venduto += importo;
+          if (/fattura/i.test(x.type && x.type.value || '')) conti.fatture += importo; else conti.scontrini += importo;
+        });
+        var filtrato = vendite.sedi.length || stampante;
+        return tuttiIRighe('/retail/row/list?dataTableView=order_row_table&f%5Brange%5D=' + range, 1000).then(function (righe) {
+          conti.pezzi = 0;
+          righe.forEach(function (x) {
+            if (!entro[x.order_id]) return;
+            conti.pezzi += +(x.quantity && typeof x.quantity === 'object' ? x.quantity.value : x.quantity) || 0;
+          });
+          // Resi: l'elenco non si filtra per punto vendita; senza filtri si contano quelli fatti entro l'ora,
+          // con il valore della dashboard (IE o IC) ripartito sui resi del giorno.
+          var resaIntera = (datiInteri.tessere.filter(function (t) { return /merce resa/i.test(t.nome); })[0] || {}).valore;
+          var resaZero = !resaIntera || !numero(resaIntera);
+          if (resaZero) { conti.resa = 0; return conti; }
+          if (filtrato) { conti.resa = null; return conti; }
+          return tuttiIRighe('/retail/refund/row/list?dataTableView=refund_row_table&f%5Brange%5D=' + range, 1000).then(function (resi) {
+            var tot = 0, parte = 0;
+            resi.forEach(function (x) { var v = Math.abs(+x.refundTotal || numero(String(x.refundTotal || '')) || 0); tot += v; var mm = minutiCrm(x.refund_createdAt); if (mm != null && mm <= limite) parte += v; });
+            conti.resa = tot > 0 ? numero(resaIntera) * parte / tot : null;
+            return conti;
+          }, function () { conti.resa = null; return conti; });
+        });
+      }).then(function (c) {
+        var valori = {};
+        valori['Numero vendite'] = interoItaliano(c.vendite);
+        valori['Prodotti venduti'] = interoItaliano(c.pezzi);
+        valori['Totale venduto'] = soldiTessera(c.venduto);
+        valori['Totale scontrini'] = soldiTessera(c.scontrini);
+        valori['Totale fatture'] = soldiTessera(c.fatture);
+        valori['Valore scontrino medio'] = soldiTessera(c.vendite ? c.venduto / c.vendite : 0);
+        if (c.resa != null) valori['Totale merce resa'] = soldiTessera(c.resa);
+        return { valori: valori, ora: ('0' + adesso.getHours()).slice(-2) + ':' + ('0' + adesso.getMinutes()).slice(-2) };
+      });
     }
     var GIORNI = ['dom', 'lun', 'mar', 'mer', 'gio', 'ven', 'sab'];
     function dataBreve(d) { return GIORNI[d.getDay()] + ' ' + d.getDate() + ' ' + MESI[d.getMonth()] + ' ' + d.getFullYear(); }
@@ -3834,6 +3917,11 @@ window.__IP_MODIFICA=true;
             if (n[0] && n[0] !== vendite.confronto) { vendite.confronto = n[0]; caricaVendite(); }
           }, true);
         }));
+        if (orarioPossibile()) righeFiltri.appendChild(rigaFiltro('Orario', vendite.orario ? 'Fino all’ora di adesso' : 'Giornata intera', function () {
+          foglioScelta('Confronta fino a', [{ v: 'si', t: 'Fino all’ora di adesso' }, { v: 'no', t: 'Giornata intera' }], [vendite.orario ? 'si' : 'no'], false, function (n) {
+            if (n[0]) { vendite.orario = n[0] === 'si'; caricaVendite(); }
+          }, true);
+        }));
         // Filtri chiusi in una riga sola con il riepilogo; toccandola si aprono. La scelta resta ricordata.
         var chiusi = true;
         try { chiusi = localStorage.getItem('ip-filtri-dash') !== 'aperti'; } catch (e) { /* restano chiusi */ }
@@ -3897,7 +3985,8 @@ window.__IP_MODIFICA=true;
       var nomiPeriodo = { oggi: 'Oggi', ieri: 'Ieri', settimana: 'Questa settimana', mese: 'Questo mese', anno: 'Quest\'anno', date: testoIntervallo() };
       vista.appendChild(el('div', 'ip-riepilogo-filtri', [nomiPeriodo[vendite.periodo], nomeSedi, nomeCassa].join(' · ')));
       var altro = intervalloConfronto();
-      if (altro) vista.appendChild(el('div', 'ip-riepilogo-confronto', 'Confronto con ' + nomeIntervallo(altro[0], altro[1])));
+      var coRiep = confrontoOrario();
+      if (altro) vista.appendChild(el('div', 'ip-riepilogo-confronto', 'Confronto con ' + nomeIntervallo(altro[0], altro[1]) + (coRiep ? ' fino alle ' + coRiep.ora : (orarioPossibile() && vendite.orario ? (vendite.orarioErrore ? ': non riesco a contare fino all’ora di adesso' : ' fino all’ora di adesso…') : ''))));
 
       azioni.innerHTML = '';
       radice.classList.add('ip-senza-azioni');
@@ -3926,7 +4015,11 @@ window.__IP_MODIFICA=true;
         var c = vendite.datiConfronto;
         if (!c || !intervalloConfronto()) return null;
         var t = c.tessere.filter(function (x) { return x.nome === nome; })[0];
-        return t ? t.valore : null;
+        if (!t) return null;
+        var co = confrontoOrario();
+        if (!co) return vendite.orario && orarioPossibile() ? null : t.valore; // in attesa dei conti all'ora giusta
+        var chiave = Object.keys(co.valori).filter(function (k) { return nome.indexOf(k) === 0 || k.indexOf(nome) === 0; })[0];
+        return chiave ? co.valori[chiave] : null;
       }
       var principale = d.tessere.filter(function (t) { return /^Totale venduto/.test(t.nome); })[0];
       if (principale) {
@@ -3984,9 +4077,11 @@ window.__IP_MODIFICA=true;
 
     function caricaVendite() {
       var mia = ++richiesta;
-      try { localStorage.setItem('ip-vendite', JSON.stringify({ sedi: vendite.sedi, stampante: vendite.stampante, iva: vendite.iva, confronto: vendite.confronto })); } catch (e) { /* non indispensabile */ }
+      try { localStorage.setItem('ip-vendite', JSON.stringify({ sedi: vendite.sedi, stampante: vendite.stampante, iva: vendite.iva, confronto: vendite.confronto, orario: vendite.orario })); } catch (e) { /* non indispensabile */ }
       vendite.dati = null;
       vendite.datiConfronto = null;
+      vendite.orarioConfronto = null;
+      vendite.orarioErrore = false;
       disegnaVendite();
       var indirizzo = '/retail/order/dashboard?form%5Bprinter%5D=' + encodeURIComponent(vendite.stampante) + '&form%5Brange%5D=' + encodeURIComponent(intervallo()) +
         '&form%5Bvat%5D=' + vendite.iva + vendite.sedi.map(function (s) { return '&form%5Bheadquarters%5D%5B%5D=' + encodeURIComponent(s); }).join('');
@@ -4012,6 +4107,17 @@ window.__IP_MODIFICA=true;
           if (!vecchio) return;
           vendite.datiConfronto = vecchio.dati;
           disegnaVendite();
+          if (vendite.orario && orarioPossibile()) {
+            calcolaOrario(altro[0], vecchio.dati).then(function (co) {
+              if (mia !== richiesta || vistaCarrelli !== 'vendite') return;
+              vendite.orarioConfronto = co;
+              disegnaVendite();
+            }, function () {
+              if (mia !== richiesta || vistaCarrelli !== 'vendite') return;
+              vendite.orarioErrore = true;
+              disegnaVendite();
+            });
+          }
         }, function () { /* senza confronto restano i numeri del periodo */ });
       }, function () {
         if (mia !== richiesta || vistaCarrelli !== 'vendite') return;
@@ -4096,7 +4202,7 @@ window.__IP_MODIFICA=true;
     function nomeCassa(stampante) { return pulisci(String(stampante || '').replace(/^EPSON\s+/i, '')); }
     function chip(testo, classe) { return el('span', 'ip-chip-stato' + (classe ? ' ' + classe : ''), testo); }
     function salvaFiltriVendite() {
-      try { localStorage.setItem('ip-vendite', JSON.stringify({ sedi: vendite.sedi, stampante: vendite.stampante, iva: vendite.iva, confronto: vendite.confronto })); } catch (e) { /* non indispensabile */ }
+      try { localStorage.setItem('ip-vendite', JSON.stringify({ sedi: vendite.sedi, stampante: vendite.stampante, iva: vendite.iva, confronto: vendite.confronto, orario: vendite.orario })); } catch (e) { /* non indispensabile */ }
     }
 
     function leggiOrdine(x) {
