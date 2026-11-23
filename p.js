@@ -643,8 +643,8 @@ window.__IP_MODIFICA=true;
           voce: schede.getAttribute('data-scheda') === 'altro' ? (altro.voceAttiva || null) : null,
           voci: vociPermesse(),
           filtra: cercaInAltro() || null,
-          ordini: vistaCarrelli === 'ordini' ? { periodo: vendite.periodo, tipo: ordini.tipo || '', sedi: vendite.sedi.length, cassa: !!ordini.cassa } : null,
-          vendite: vistaCarrelli === 'vendite' ? { periodo: vendite.periodo, iva: vendite.iva, sedi: vendite.sedi.length, cassa: !!vendite.stampante, confronto: confrontoValido(), confronti: confrontiPossibili(), orario: orarioPossibile() ? vendite.orario : null } : null
+          ordini: vistaCarrelli === 'ordini' ? { periodo: vendite.periodo, periodi: vociPeriodo().slice(0, -1), tipo: ordini.tipo || '', sedi: vendite.sedi.length, cassa: !!ordini.cassa } : null,
+          vendite: vistaCarrelli === 'vendite' ? { periodo: vendite.periodo, periodi: vociPeriodo().slice(0, -1), iva: vendite.iva, sedi: vendite.sedi.length, cassa: !!vendite.stampante, confronto: confrontoValido(), confronti: confrontiPossibili(), orario: orarioPossibile() ? vendite.orario : null } : null
         });
         raccontaSelettori();
         if (racconto === ultimoRacconto) return;
@@ -3689,13 +3689,57 @@ window.__IP_MODIFICA=true;
     function giorno(d) { return ('0' + d.getDate()).slice(-2) + '/' + ('0' + (d.getMonth() + 1)).slice(-2) + '/' + d.getFullYear(); }
     function daCampo(v) { var p = String(v).split('-'); return p.length === 3 ? p[2] + '/' + p[1] + '/' + p[0] : ''; }
     function perCampo(v) { var p = String(v).split('/'); return p.length === 3 ? p[2] + '-' + p[1] + '-' + p[0] : ''; }
+    // Gli stessi periodi suggeriti dal CRM nel calendario della dashboard, nello stesso ordine.
+    // "breve" è il nome nelle pillole (schermo largo): le voci senza breve stanno in "Altri periodi".
+    var PERIODI = [
+      { v: 'oggi', t: 'Oggi', breve: 'Oggi' }, { v: 'ieri', t: 'Ieri', breve: 'Ieri' },
+      { v: 'weekend', t: 'Questo weekend' }, { v: 'weekend-scorso', t: 'Weekend scorso' },
+      { v: 'settimana', t: 'Questa settimana', breve: 'Settimana' }, { v: 'settimana-scorsa', t: 'Settimana scorsa' },
+      { v: 'mese', t: 'Questo mese', breve: 'Mese' }, { v: 'mese-scorso', t: 'Mese scorso' },
+      { v: 'anno', t: 'Da inizio anno', breve: 'Anno' }, { v: 'anno-scorso', t: 'Anno scorso' },
+      { v: '7giorni', t: 'Ultimi 7 giorni' }, { v: '30giorni', t: 'Ultimi 30 giorni' }
+    ];
+    function nomePeriodo(v) { var p = PERIODI.filter(function (x) { return x.v === v; })[0]; return p ? p.t : ''; }
+    // Voci per i menu: tutti i periodi più "Scegli le date…".
+    function vociPeriodo(dateScelte) { return PERIODI.map(function (p) { return { v: p.v, t: p.t }; }).concat([{ v: 'date', t: dateScelte || 'Scegli le date…' }]); }
+    // Pillole dello schermo largo: Oggi, Ieri, Settimana, Mese, Anno, poi "Altri periodi" (o il nome di quello scelto) e Date.
+    function pillolePeriodo(scelto, dateScelte, cambia) {
+      var box = el('div', 'ip-pillole');
+      PERIODI.filter(function (p) { return p.breve; }).forEach(function (p) {
+        var t = el('button', scelto === p.v ? 'ip-scelto' : '', p.breve);
+        t.type = 'button';
+        t.addEventListener('click', function () { cambia(p.v); });
+        box.appendChild(t);
+      });
+      var altro = PERIODI.filter(function (p) { return p.v === scelto && !p.breve; })[0];
+      var altri = el('button', altro ? 'ip-scelto' : '', altro ? altro.t : 'Altri periodi…');
+      altri.type = 'button';
+      altri.addEventListener('click', function () {
+        foglioScelta('Periodo', vociPeriodo(dateScelte), [scelto], false, function (n) { if (n[0]) cambia(n[0]); }, true);
+      });
+      box.appendChild(altri);
+      var date = el('button', scelto === 'date' ? 'ip-scelto' : '', dateScelte || 'Date…');
+      date.type = 'button';
+      date.addEventListener('click', function () { cambia('date'); });
+      box.appendChild(date);
+      return box;
+    }
     function intervallo() {
       var oggi = new Date(), da = new Date(oggi), a = new Date(oggi);
-      if (vendite.periodo === 'ieri') { da.setDate(da.getDate() - 1); a = new Date(da); }
-      else if (vendite.periodo === 'settimana') { da.setDate(da.getDate() - ((da.getDay() + 6) % 7)); }
-      else if (vendite.periodo === 'mese') { da.setDate(1); }
-      else if (vendite.periodo === 'anno') { da = new Date(oggi.getFullYear(), 0, 1); }
-      else if (vendite.periodo === 'date' && vendite.da && vendite.a) { return vendite.da + ' - ' + vendite.a; }
+      var lun = (oggi.getDay() + 6) % 7; // 0 = lunedì ... 6 = domenica
+      var p = vendite.periodo;
+      if (p === 'ieri') { da.setDate(da.getDate() - 1); a = new Date(da); }
+      else if (p === 'settimana') { da.setDate(da.getDate() - lun); }
+      else if (p === 'settimana-scorsa') { da.setDate(da.getDate() - lun - 7); a = new Date(da); a.setDate(a.getDate() + 6); }
+      else if (p === 'weekend') { da.setDate(da.getDate() - lun + 5); a = new Date(da); a.setDate(a.getDate() + 1); }
+      else if (p === 'weekend-scorso') { da.setDate(da.getDate() - lun - 2); a = new Date(da); a.setDate(a.getDate() + 1); }
+      else if (p === 'mese') { da.setDate(1); }
+      else if (p === 'mese-scorso') { da = new Date(oggi.getFullYear(), oggi.getMonth() - 1, 1); a = new Date(oggi.getFullYear(), oggi.getMonth(), 0); }
+      else if (p === 'anno') { da = new Date(oggi.getFullYear(), 0, 1); }
+      else if (p === 'anno-scorso') { da = new Date(oggi.getFullYear() - 1, 0, 1); a = new Date(oggi.getFullYear() - 1, 11, 31); }
+      else if (p === '7giorni') { da.setDate(da.getDate() - 6); }
+      else if (p === '30giorni') { da.setDate(da.getDate() - 29); }
+      else if (p === 'date' && vendite.da && vendite.a) { return vendite.da + ' - ' + vendite.a; }
       return giorno(da) + ' - ' + giorno(a);
     }
 
@@ -3711,7 +3755,7 @@ window.__IP_MODIFICA=true;
     function giorniPeriodo() { var e = intervallo().split(' - '); return Math.round((aData(e[1]) - aData(e[0])) / 864e5) + 1; }
     function confrontiPossibili() {
       var n = giorniPeriodo();
-      var prima = vendite.periodo === 'anno' ? null : n === 1 ? 'Settimana prima, stesso giorno' : n <= 7 ? 'Settimana prima' : n <= 31 ? 'Mese prima, stesse date' : null;
+      var prima = n === 1 ? 'Settimana prima, stesso giorno' : n <= 7 ? 'Settimana prima' : n <= 31 ? 'Mese prima, stesse date' : null;
       var voci = [{ v: 'no', t: CONFRONTI.no }];
       if (prima) voci.push({ v: 'prima', t: prima });
       voci.push({ v: 'anno-sett', t: CONFRONTI['anno-sett'] }, { v: 'anno-data', t: CONFRONTI['anno-data'] });
@@ -4124,11 +4168,11 @@ window.__IP_MODIFICA=true;
       if (VETRO) {
         // Android: filtri come righe con nome e valore (Periodo, Punti vendita, Cassa, IVA, Confronta con);
         // toccando una riga si apre la scelta. Niente file di pillole che non si capiscono.
-        var PERIODI = [{ v: 'oggi', t: 'Oggi' }, { v: 'ieri', t: 'Ieri' }, { v: 'settimana', t: 'Questa settimana' }, { v: 'mese', t: 'Questo mese' }, { v: 'anno', t: 'Quest\'anno' }, { v: 'date', t: 'Scegli le date…' }];
+        var VOCI_PERIODO = vociPeriodo();
         var righeFiltri = el('div', 'ip-scheda ip-lista ip-filtri-righe ip-filtri-vendite');
-        var periodoOra = vendite.periodo === 'date' ? testoIntervallo() : (PERIODI.filter(function (x) { return x.v === vendite.periodo; })[0] || PERIODI[0]).t;
+        var periodoOra = vendite.periodo === 'date' ? testoIntervallo() : (nomePeriodo(vendite.periodo) || 'Oggi');
         righeFiltri.appendChild(rigaFiltro('Periodo', periodoOra, function () {
-          foglioScelta('Periodo', PERIODI, [vendite.periodo], false, function (n) {
+          foglioScelta('Periodo', VOCI_PERIODO, [vendite.periodo], false, function (n) {
             if (!n[0]) return;
             if (n[0] === 'date') { foglioDate(); return; }
             if (n[0] !== vendite.periodo) { vendite.periodo = n[0]; caricaVendite(); }
@@ -4171,18 +4215,13 @@ window.__IP_MODIFICA=true;
         });
         vista.appendChild(righeFiltri);
       } else {
-      var periodi = el('div', 'ip-pillole ip-filtri-dash');
-      [['oggi', 'Oggi'], ['ieri', 'Ieri'], ['settimana', 'Settimana'], ['mese', 'Mese'], ['anno', 'Anno'], ['date', vendite.periodo === 'date' ? dateCorte() : 'Date…']].forEach(function (p) {
-        var t = el('button', vendite.periodo === p[0] ? 'ip-scelto' : '', p[1]);
-        t.type = 'button';
-        t.addEventListener('click', function () {
-          if (p[0] === 'date') { foglioDate(); return; }
-          if (vendite.periodo === p[0]) return;
-          vendite.periodo = p[0];
-          caricaVendite();
-        });
-        periodi.appendChild(t);
+      var periodi = pillolePeriodo(vendite.periodo, vendite.periodo === 'date' ? dateCorte() : '', function (v) {
+        if (v === 'date') { foglioDate(); return; }
+        if (vendite.periodo === v) return;
+        vendite.periodo = v;
+        caricaVendite();
       });
+      periodi.classList.add('ip-filtri-dash');
       vista.appendChild(periodi);
 
       var filtri = el('div', 'ip-pillole ip-pillole-filtri ip-filtri-dash');
@@ -4211,10 +4250,18 @@ window.__IP_MODIFICA=true;
         b.addEventListener('click', function () { if (vendite.confronto === o.v) return; vendite.confronto = o.v; caricaVendite(); });
         confronti.appendChild(b);
       });
+      // Guardando oggi: confronto fino all'ora di adesso (prima mancava sullo schermo largo).
+      if (orarioPossibile()) {
+        var ora = crea('button', 'ip-interruttore' + (vendite.orario ? ' ip-acceso' : ''), '<span>Fino all’ora di adesso</span><i></i>');
+        ora.type = 'button';
+        ora.setAttribute('role', 'switch');
+        ora.setAttribute('aria-checked', vendite.orario ? 'true' : 'false');
+        ora.addEventListener('click', function () { vendite.orario = !vendite.orario; caricaVendite(); });
+        confronti.appendChild(ora);
+      }
       vista.appendChild(confronti);
       }
-      var nomiPeriodo = { oggi: 'Oggi', ieri: 'Ieri', settimana: 'Questa settimana', mese: 'Questo mese', anno: 'Quest\'anno', date: testoIntervallo() };
-      vista.appendChild(el('div', 'ip-riepilogo-filtri', [nomiPeriodo[vendite.periodo], nomeSedi, nomeCassa].join(' · ')));
+      vista.appendChild(el('div', 'ip-riepilogo-filtri', [vendite.periodo === 'date' ? testoIntervallo() : nomePeriodo(vendite.periodo), nomeSedi, nomeCassa].join(' · ')));
       var altro = intervalloConfronto();
       var coRiep = confrontoOrario();
       if (altro) vista.appendChild(el('div', 'ip-riepilogo-confronto', 'Confronto con ' + nomeIntervallo(altro[0], altro[1]) + (coRiep ? ' fino alle ' + coRiep.ora : (orarioPossibile() && vendite.orario ? (vendite.orarioErrore ? ': non riesco a contare fino all’ora di adesso' : ' fino all’ora di adesso…') : ''))));
@@ -4596,19 +4643,9 @@ window.__IP_MODIFICA=true;
         caricaOrdini(true);
       };
       if (NATIVO) {
-        box.appendChild(rigaMenu('Periodo', [
-          { v: 'oggi', t: 'Oggi' }, { v: 'ieri', t: 'Ieri' }, { v: 'settimana', t: 'Questa settimana' }, { v: 'mese', t: 'Questo mese' },
-          { v: 'anno', t: 'Quest\'anno' }, { v: 'date', t: dateScelte || 'Scegli le date…' }
-        ], vendite.periodo, cambiaPeriodo));
+        box.appendChild(rigaMenu('Periodo', vociPeriodo(dateScelte), vendite.periodo, cambiaPeriodo));
       } else {
-        var pillole = el('div', 'ip-pillole');
-        [['oggi', 'Oggi'], ['ieri', 'Ieri'], ['settimana', 'Settimana'], ['mese', 'Mese'], ['anno', 'Anno'], ['date', dateScelte || 'Date…']].forEach(function (p) {
-          var t = el('button', vendite.periodo === p[0] ? 'ip-scelto' : '', p[1]);
-          t.type = 'button';
-          t.addEventListener('click', function () { cambiaPeriodo(p[0]); });
-          pillole.appendChild(t);
-        });
-        box.appendChild(pillole);
+        box.appendChild(pillolePeriodo(vendite.periodo, dateScelte, cambiaPeriodo));
       }
       // Punti vendita (gli stessi della Dashboard) e cassa.
       var opz = ordini.opzioni;
@@ -6408,19 +6445,9 @@ window.__IP_MODIFICA=true;
         ricarica();
       };
       if (NATIVO) {
-        box.appendChild(rigaMenu('Periodo', [
-          { v: 'oggi', t: 'Oggi' }, { v: 'ieri', t: 'Ieri' }, { v: 'settimana', t: 'Questa settimana' }, { v: 'mese', t: 'Questo mese' },
-          { v: 'anno', t: 'Quest\'anno' }, { v: 'date', t: dateScelte || 'Scegli le date…' }
-        ], vendite.periodo, cambia));
+        box.appendChild(rigaMenu('Periodo', vociPeriodo(dateScelte), vendite.periodo, cambia));
       } else {
-        var pillole = el('div', 'ip-pillole');
-        [['oggi', 'Oggi'], ['ieri', 'Ieri'], ['settimana', 'Settimana'], ['mese', 'Mese'], ['anno', 'Anno'], ['date', dateScelte || 'Date…']].forEach(function (p) {
-          var t = el('button', vendite.periodo === p[0] ? 'ip-scelto' : '', p[1]);
-          t.type = 'button';
-          t.addEventListener('click', function () { cambia(p[0]); });
-          pillole.appendChild(t);
-        });
-        box.appendChild(pillole);
+        box.appendChild(pillolePeriodo(vendite.periodo, dateScelte, cambia));
       }
       if (conSedi) {
         var righe = el('div', 'ip-scheda ip-lista ip-filtri-righe');
